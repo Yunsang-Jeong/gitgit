@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "GitGit",
+  "outputfilename": "GitGit",
+  "frontend:install": "npm ci",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Yunsang"
+  },
+  "info": {
+    "companyName": "GitGit",
+    "productName": "GitGit",
+    "productVersion": "0.2.0",
+    "copyright": "Copyright © 2026 Yunsang",
+    "comments": "Git history and worktree workbench"
+  }
+}
