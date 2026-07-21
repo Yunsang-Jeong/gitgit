@@ -63,10 +63,6 @@ export function isCommitVisible(commit: FilterableCommit, rules: CommitFilterRul
   return shown && !hidden
 }
 
-export function isCommitHighlighted(commit: FilterableCommit, rules: CommitFilterRule[]): boolean {
-  return rules.some((rule) => rule.action === 'highlight' && commitMatchesRule(commit, rule))
-}
-
 export function visibleCommits(commits: CommitSummary[], rules: CommitFilterRule[], logic: CommitFilterLogic = defaultFilterLogic): CommitSummary[] {
   return commits.filter((commit) => isCommitVisible(commit, rules, logic))
 }

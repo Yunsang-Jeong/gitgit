@@ -12,27 +12,41 @@ import (
 )
 
 const (
-	maximumCachedRepositories = 8
-	maximumCachedHistoryPages = 16
-	maximumCachedDetails      = 128
-	maximumCachedBranches     = 1000
+	maximumCachedRepositories  = 8
+	maximumCachedHistoryScopes = 32
+	maximumCachedHistoryPages  = 16
+	maximumCachedDetails       = 128
+	maximumCachedBranches      = 1000
 )
 
 type repositoryCache struct {
-	fingerprint string
-	history     map[string]HistoryResponse
-	historyKeys []string
-	details     map[string]CommitDetail
-	detailKeys  []string
-	branches    map[string][]string
-	branchKeys  []string
+	fingerprint      string
+	historyScopes    map[string]historyScopeContext
+	historyScopeKeys []string
+	history          map[string]HistoryResponse
+	historyKeys      []string
+	details          map[string]CommitDetail
+	detailKeys       []string
+	branches         map[string][]string
+	branchKeys       []string
+}
+
+type historyScopeContext struct {
+	relatedScope       string
+	branchPoint        string
+	branchPointParents []string
+	allRevisions       []string
+	allowedRemoteRefs  map[string]bool
+	total              int
+	branches           []string
 }
 
 func newRepositoryCache() *repositoryCache {
 	return &repositoryCache{
-		history:  make(map[string]HistoryResponse),
-		details:  make(map[string]CommitDetail),
-		branches: make(map[string][]string),
+		historyScopes: make(map[string]historyScopeContext),
+		history:       make(map[string]HistoryResponse),
+		details:       make(map[string]CommitDetail),
+		branches:      make(map[string][]string),
 	}
 }
 
@@ -47,6 +61,31 @@ func repositoryFingerprint(ctx context.Context, repository *gitexec.Repository) 
 
 func historyCacheKey(request HistoryRequest, scope, related, head string, all bool, revisions []string) string {
 	return fmt.Sprintf("branch-boundary-v2\x00%t\x00%s\x00%s\x00%s\x00%s\x00%d\x00%d", all, scope, related, head, strings.Join(revisions, "\x00"), request.Limit, request.Skip)
+}
+
+func historyScopeCacheKey(root, scope, related, head string, all bool) string {
+	return fmt.Sprintf("scope-v1\x00%s\x00%t\x00%s\x00%s\x00%s", root, all, scope, related, head)
+}
+
+func (s *Service) cachedHistoryScope(root, fingerprint, key string) (historyScopeContext, bool) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	cache := s.cacheForRepositoryLocked(root)
+	s.refreshRefCacheLocked(cache, fingerprint)
+	value, ok := cache.historyScopes[key]
+	return cloneHistoryScopeContext(value), ok
+}
+
+func (s *Service) storeHistoryScope(root, fingerprint, key string, value historyScopeContext) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	cache := s.cacheForRepositoryLocked(root)
+	s.refreshRefCacheLocked(cache, fingerprint)
+	if _, exists := cache.historyScopes[key]; !exists {
+		cache.historyScopeKeys = append(cache.historyScopeKeys, key)
+	}
+	cache.historyScopes[key] = cloneHistoryScopeContext(value)
+	trimCache(cache.historyScopes, &cache.historyScopeKeys, maximumCachedHistoryScopes)
 }
 
 func detailCacheKey(oid, filePath string) string {
@@ -173,10 +212,24 @@ func (s *Service) refreshRefCacheLocked(cache *repositoryCache, fingerprint stri
 		return
 	}
 	cache.fingerprint = fingerprint
+	cache.historyScopes = make(map[string]historyScopeContext)
+	cache.historyScopeKeys = nil
 	cache.history = make(map[string]HistoryResponse)
 	cache.historyKeys = nil
 	cache.branches = make(map[string][]string)
 	cache.branchKeys = nil
+}
+
+func cloneHistoryScopeContext(value historyScopeContext) historyScopeContext {
+	cloned := value
+	cloned.branchPointParents = append([]string(nil), value.branchPointParents...)
+	cloned.allRevisions = append([]string(nil), value.allRevisions...)
+	cloned.allowedRemoteRefs = make(map[string]bool, len(value.allowedRemoteRefs))
+	for ref, allowed := range value.allowedRemoteRefs {
+		cloned.allowedRemoteRefs[ref] = allowed
+	}
+	cloned.branches = append([]string(nil), value.branches...)
+	return cloned
 }
 
 func trimCache[T any](values map[string]T, keys *[]string, maximum int) {

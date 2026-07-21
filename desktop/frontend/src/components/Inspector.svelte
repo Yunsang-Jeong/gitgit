@@ -6,7 +6,7 @@
   import { formatDate } from '../lib/datetime'
   import { buildReviewLink } from '../lib/review-links'
   import { defaultFirstRefs } from '../lib/remotes'
-  import type { ChangedFilesView, CommitDetail, CommitFilterAction, ContextMenuItem, FileChange, RemoteInfo, RepositoryTreeResponse, SearchResult } from '../lib/types'
+  import type { ChangedFilesView, CommitDetail, ContextMenuItem, FileChange, RemoteInfo, RepositoryTreeResponse, SearchResult } from '../lib/types'
 
   export let selected: CommitDetail | SearchResult | null
   export let fileRevision: string
@@ -19,8 +19,7 @@
   export let onOpenFinder: (path: string) => void
   export let onOpenTerminal: (path: string) => void
   export let onOpenExternalURL: (url: string) => void
-  export let onSelectFile: (path: string) => Promise<void>
-  export let onAddFilter: (action: CommitFilterAction, path: string) => void
+  export let onSelectFile: (path: string) => Promise<CommitDetail | SearchResult | void>
   export let onAddFileSearch: (path: string) => void
   export let onLoadTree: (revision: string, directory: string) => Promise<RepositoryTreeResponse>
 
@@ -34,6 +33,7 @@
   let observedCommit = selected?.commit ?? ''
   let collapsedDirectories = new Set<string>()
   let diffFile: FileChange | null = null
+  let selectedFileDetail: CommitDetail | SearchResult | null = null
   let diffLoading = false
   let diffRequestID = 0
   let popoverPosition: PopoverPosition | null = null
@@ -44,10 +44,16 @@
   $: changedFileTree = buildChangedFileTree(selected?.files ?? [])
   $: selectedParents = selected && 'parents' in selected ? selected.parents : []
   $: selectedRefs = defaultFirstRefs(selected?.refs, defaultBranch)
+  $: matchedSearchFiles = selected && 'matched_files' in selected ? selected.matched_files ?? [] : []
   $: isMergeCommit = selectedParents.length > 1
   $: reviewLink = selected ? buildReviewLink(selected.message, selectedParents, remotes, upstream) : null
   $: visibleChangedNodes = flattenChangedFileTree(changedFileTree)
-  $: diffLines = diffFile && selected?.file.path === diffFile.path ? addedAndDeletedLines(selected.diff) : []
+  $: selectedFileDiff = diffFile && selectedFileDetail?.file.path === diffFile.path
+    ? selectedFileDetail.diff
+    : diffFile && selected?.file.path === diffFile.path
+      ? selected.diff
+      : ''
+  $: diffLines = addedAndDeletedLines(selectedFileDiff)
   $: if (defaultChangedFilesView !== observedDefaultChangedFilesView) {
     observedDefaultChangedFilesView = defaultChangedFilesView
     changedFilesView = defaultChangedFilesView
@@ -56,6 +62,7 @@
   $: if ((selected?.commit ?? '') !== observedCommit) {
     observedCommit = selected?.commit ?? ''
     collapsedDirectories = new Set<string>()
+    selectedFileDetail = null
     closeDiffPopover()
   }
 
@@ -65,6 +72,10 @@
 
   function fileLabel(file: FileChange): string {
     return file.old_path ? `${file.old_path} → ${file.path}` : file.path
+  }
+
+  function isSearchMatch(file: FileChange): boolean {
+    return matchedSearchFiles.some((matched) => matched.path === file.path && (matched.old_path ?? '') === (file.old_path ?? ''))
   }
 
   function flattenChangedFileTree(nodes: ChangedFileTreeNode[], depth = 0): VisibleChangedNode[] {
@@ -116,7 +127,8 @@
     popoverPosition = positionDiffPopover((event.currentTarget as HTMLElement).getBoundingClientRect())
     const requestID = ++diffRequestID
     try {
-      await onSelectFile(file.path)
+      const detail = await onSelectFile(file.path)
+      if (requestID === diffRequestID && detail && detail.commit === selected?.commit) selectedFileDetail = detail
     } finally {
       if (requestID === diffRequestID) diffLoading = false
     }
@@ -137,6 +149,7 @@
   function closeDiffPopover(): void {
     diffRequestID += 1
     diffFile = null
+    selectedFileDetail = null
     diffLoading = false
     popoverPosition = null
   }
@@ -146,11 +159,6 @@
   }
 
   function openPathContextMenu(event: MouseEvent, path: string, pattern = path): void {
-    const filterItems = (['hide', 'show', 'highlight'] as CommitFilterAction[]).map((action, index) => ({
-      label: `Add filter: ${action[0].toLocaleUpperCase()}${action.slice(1)}`,
-      separatorBefore: index === 0,
-      run: () => onAddFilter(action, pattern),
-    }))
     contextMenu = {
       x: event.clientX,
       y: event.clientY,
@@ -158,7 +166,6 @@
       targetPath: path,
       items: [
         { label: 'Copy path', run: () => copyLayer(path, 'File path') },
-        ...filterItems,
         { label: 'Add search', separatorBefore: true, run: () => onAddFileSearch(pattern) },
         { label: 'Open Finder', separatorBefore: true, run: () => onOpenFinder(path) },
         { label: 'Open Terminal', run: () => onOpenTerminal(path) },
@@ -200,7 +207,6 @@
       changedFiles={selected?.files ?? []}
       {onLoadTree}
       onCopyPath={(path) => void copyLayer(path, 'File path')}
-      {onAddFilter}
       onAddSearch={onAddFileSearch}
       {onOpenFinder}
       {onOpenTerminal}
@@ -266,12 +272,14 @@
               on:click={(event) => void openDiffPopover(event, file)}
               on:contextmenu|preventDefault={(event) => openPathContextMenu(event, file.path)}
               class:selected={diffFile?.path === file.path}
+              class:search-match={isSearchMatch(file)}
               class:interaction-active={contextMenu?.targetPath === file.path}
-              class="changed-file-row"
+              class="changed-file-row context-action"
               aria-expanded={diffFile?.path === file.path}
             >
               <span class="file-status status-{file.status[0]?.toLowerCase()}">{file.status[0]}</span>
               <span class="copy-target" title={fileLabel(file)}>{fileLabel(file)}</span>
+              {#if isSearchMatch(file)}<small class="search-file-match">Match</small>{/if}
             </button>
           {/each}
         </div>
@@ -282,7 +290,7 @@
             {#if node.kind === 'directory'}
               <button
                 class:interaction-active={contextMenu?.targetPath === node.path}
-                class="changed-tree-row directory"
+                class="changed-tree-row directory context-action"
                 type="button"
                 role="treeitem"
                 aria-level={visible.depth + 1}
@@ -299,8 +307,9 @@
             {:else if node.file}
               <button
                 class:selected={diffFile?.path === node.file.path}
+                class:search-match={isSearchMatch(node.file)}
                 class:interaction-active={contextMenu?.targetPath === node.file.path}
-                class="changed-tree-row file"
+                class="changed-tree-row file context-action"
                 type="button"
                 role="treeitem"
                 aria-level={visible.depth + 1}
@@ -313,6 +322,7 @@
                 <span class="tree-chevron-spacer"></span>
                 <span class="file-status status-{node.file.status[0]?.toLowerCase()}">{node.file.status[0]}</span>
                 <span class="copy-target" title={node.file.path}>{node.name}</span>
+                {#if isSearchMatch(node.file)}<small class="search-file-match">Match</small>{/if}
               </button>
             {/if}
           {/each}

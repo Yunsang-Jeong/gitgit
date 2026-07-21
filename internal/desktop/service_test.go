@@ -178,6 +178,105 @@ func TestRepositorySwitchCancelsRegisteredReadOperations(t *testing.T) {
 	}
 }
 
+func TestLatestReadOperationCancelsOnlyThePreviousRequestForItsSurface(t *testing.T) {
+	service := NewService(nil)
+	firstContext, finishFirst := service.beginLatestOperation(context.Background(), "commit-detail")
+	secondContext, finishSecond := service.beginLatestOperation(context.Background(), "commit-detail")
+	defer finishSecond()
+
+	select {
+	case <-firstContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("newer detail request did not cancel the previous request")
+	}
+	if err := secondContext.Err(); err != nil {
+		t.Fatalf("latest detail request was canceled: %v", err)
+	}
+
+	finishFirst()
+	if err := secondContext.Err(); err != nil {
+		t.Fatalf("finishing the old request canceled the latest request: %v", err)
+	}
+
+	otherContext, finishOther := service.beginLatestOperation(context.Background(), "repository-tree")
+	defer finishOther()
+	if err := secondContext.Err(); err != nil {
+		t.Fatalf("a different read surface canceled detail: %v", err)
+	}
+	if err := otherContext.Err(); err != nil {
+		t.Fatalf("repository tree request started canceled: %v", err)
+	}
+}
+
+func TestHistoryAndSearchBatchChangedFileMetadata(t *testing.T) {
+	repository := createRepository(t)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandLog := filepath.Join(t.TempDir(), "git-commands.log")
+	wrapper := filepath.Join(t.TempDir(), "git-wrapper")
+	wrapperSource := `#!/bin/sh
+printf '%s\n' "$*" >> "$TEST_COMMAND_LOG"
+exec "$TEST_REAL_GIT" "$@"
+`
+	if err := os.WriteFile(wrapper, []byte(wrapperSource), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_REAL_GIT", realGit)
+	t.Setenv("TEST_COMMAND_LOG", commandLog)
+	service := NewService(&gitexec.Runner{Binary: wrapper})
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(commandLog, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := service.History(context.Background(), HistoryRequest{Scope: "main", Limit: 1})
+	if err != nil || len(first.Commits) != 1 || len(first.Commits[0].Files) == 0 {
+		t.Fatalf("read first history page: commits=%#v err=%v", first.Commits, err)
+	}
+	second, err := service.History(context.Background(), HistoryRequest{Scope: "main", Limit: 1, Skip: 1})
+	if err != nil || len(second.Commits) != 1 || len(second.Commits[0].Files) == 0 {
+		t.Fatalf("read second history page: commits=%#v err=%v", second.Commits, err)
+	}
+	commands := readFile(t, commandLog)
+	if got := strings.Count(commands, " diff-tree --stdin "); got != 2 {
+		t.Fatalf("history diff-tree batch count = %d, want one per page\n%s", got, commands)
+	}
+	if strings.Contains(commands, " show --first-parent --format= --name-status ") {
+		t.Fatalf("history fell back to one changed-file process per commit\n%s", commands)
+	}
+	if got := strings.Count(commands, " rev-list --count "); got != 1 {
+		t.Fatalf("history scope count commands = %d, want one across pages\n%s", got, commands)
+	}
+
+	if err := os.WriteFile(commandLog, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.Search(context.Background(), SearchRequest{
+		Patterns: []Pattern{{Source: "msg", Value: "*search*"}},
+		Engine:   "glob", Scope: "HEAD", Limit: 20, Context: 3,
+	})
+	if err != nil || response.Count == 0 || response.Results[0].Message == "" || response.Results[0].Date == "" {
+		t.Fatalf("search with log metadata: response=%#v err=%v", response, err)
+	}
+	commands = readFile(t, commandLog)
+	if got := strings.Count(commands, " diff-tree --stdin "); got != 1 {
+		t.Fatalf("search diff-tree batch count = %d, want one for the fixture\n%s", got, commands)
+	}
+	if strings.Contains(commands, " rev-list --count ") {
+		t.Fatalf("search ran a redundant scope count\n%s", commands)
+	}
+	if strings.Contains(commands, "--format=%B%x00%aI%x00%D") {
+		t.Fatalf("search re-read metadata for each result\n%s", commands)
+	}
+	if strings.Contains(commands, " show --format= --no-ext-diff ") {
+		t.Fatalf("message-only search eagerly loaded result diffs\n%s", commands)
+	}
+}
+
 func TestLatestFailedRepositorySwitchDoesNotInstallAnOlderRequest(t *testing.T) {
 	firstRepository := createRepository(t)
 	secondRepository := createRepository(t)
@@ -410,18 +509,18 @@ func TestSearchRejectsUnknownPatternSource(t *testing.T) {
 func TestSearchOptionsPreservesPatternOrderAndJoins(t *testing.T) {
 	options, _, err := searchOptions(SearchRequest{
 		Patterns: []Pattern{
-			{Source: "MSG", Value: "*alpha*"},
+			{Source: "MSG", Value: "*alpha*", OpenGroups: 1},
 			{Source: "DIFF", Value: "*beta*", Join: "OR"},
-			{Source: "FILE", Value: "**/*.go", Join: "AND"},
+			{Source: "FILE", Value: "**/*.go", Join: "AND", CloseGroups: 1},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []app.SearchPredicate{
-		{Source: "msg", Value: "*alpha*"},
+		{Source: "msg", Value: "*alpha*", OpenGroups: 1},
 		{Source: "diff", Value: "*beta*", Join: "or"},
-		{Source: "file", Value: "**/*.go", Join: "and"},
+		{Source: "file", Value: "**/*.go", Join: "and", CloseGroups: 1},
 	}
 	if !reflect.DeepEqual(options.Predicates, want) {
 		t.Fatalf("predicates = %#v, want %#v", options.Predicates, want)
@@ -991,9 +1090,19 @@ func TestServiceCanonicalSubgitSearchScenarios(t *testing.T) {
 			if response.Scanned != test.wantScanned || response.Count != test.wantCount {
 				t.Fatalf("scanned/count = %d/%d, want %d/%d: %#v", response.Scanned, response.Count, test.wantScanned, test.wantCount, response.Results)
 			}
+			requiresDiff := false
+			for _, pattern := range test.request.Patterns {
+				requiresDiff = requiresDiff || strings.EqualFold(pattern.Source, "diff")
+			}
 			for _, result := range response.Results {
-				if result.Commit == "" || result.ShortCommit == "" || result.Message == "" || result.Date == "" || result.Diff == "" {
-					t.Fatalf("result is missing inspector metadata: %#v", result)
+				if result.Commit == "" || result.ShortCommit == "" || result.Message == "" || result.Date == "" || len(result.Files) == 0 {
+					t.Fatalf("result is missing table metadata: %#v", result)
+				}
+				if requiresDiff && result.Diff == "" {
+					t.Fatalf("DIFF result is missing the matched file diff: %#v", result)
+				}
+				if !requiresDiff && result.Diff != "" {
+					t.Fatalf("summary-only result eagerly loaded a file diff: %#v", result)
 				}
 			}
 			if test.check != nil {
@@ -1125,6 +1234,15 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
 }
 
 func runGit(t *testing.T, directory string, environment []string, args ...string) {

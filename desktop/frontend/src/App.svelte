@@ -16,6 +16,7 @@
   import { cloneFilterPresets, defaultFilterLogic, defaultFilterPresets, resolvePresetRules } from './lib/presets'
   import { defaultRemoteBadgeRules, normalizeRemoteBadgeIcon } from './lib/remotes'
   import { groupSearchResultsByCommit, searchResultCommitCount } from './lib/search-results'
+  import { removeSearchPatternAt, searchExpressionError, searchPatternText } from './lib/search-expression'
   import type {
     AppSettings,
     ChangedFilesView,
@@ -29,6 +30,7 @@
     CommitSummary,
     CommitFileContent,
     HistoryResponse,
+    HistoryFilterProgress,
     IDEPreference,
     NavigatorView,
     Pattern,
@@ -38,6 +40,7 @@
     RepositoryTreeResponse,
     RewriteCommitsRequest,
     SearchRequest,
+    SearchProgress,
     SearchResult,
     SearchSessionStatus,
     TerminalPreference,
@@ -67,6 +70,7 @@
     resultAllRefs: boolean
     executedDraft: SearchDraftSnapshot | null
     hasSearched: boolean
+    lastSearchedAt?: string
     error: string
   }
 
@@ -74,7 +78,7 @@
 
   const paneWidthKey = 'gitgit.pane-widths.v1'
   const settingsKey = 'gitgit.settings.v1'
-  const commitRowHeight = 38
+  const commitRowHeight = 50
 
   let repository: RepositoryState | null = null
   let appVersion = 'dev'
@@ -85,14 +89,15 @@
   let historyAllBranches = true
   let historyLoading = false
   let historyLoadingMore = false
+  let historyLoadMorePromise: Promise<boolean> | null = null
   let historyAutoLoadEnabled = true
   let branchMembershipLoading = false
   let selectedCommit = ''
   let historyDetail: CommitDetail | null = null
   let detailOverride: CommitDetail | null = null
-  let manualFilterRules: CommitFilterRule[] = []
   let filterRules: CommitFilterRule[] = []
   let activePresetIDs: string[] = []
+  let historyFilterProgress: HistoryFilterProgress | null = null
 
   let patterns: Pattern[] = []
   let engine = 'glob'
@@ -104,7 +109,9 @@
   let results: SearchResult[] = []
   let selectedSearchIndex = -1
   let searching = false
+  let searchProgress: SearchProgress | null = null
   let hasSearched = false
+  let searchLastSearchedAt = ''
   let scanned = 0
   let resultScope = 'HEAD'
   let resultAllRefs = false
@@ -139,17 +146,16 @@
   let historyRequestID = 0
   let detailRequestID = 0
   let branchRequestID = 0
+  let filterRequestID = 0
   let searchRequestID = 0
   let syncRequestID = 0
   let commitEditorRequestID = 0
 
-  $: filterRules = [
-    ...manualFilterRules,
-    ...resolvePresetRules(appSettings.presets, activePresetIDs, repository?.user ?? { name: '', email: '' }),
-  ]
+  $: filterRules = resolvePresetRules(appSettings.presets, activePresetIDs, repository?.user ?? { name: '', email: '' })
   $: commitFilterRules = branchMembershipLoading ? filterRules.filter((rule) => rule.field !== 'branch') : filterRules
   $: filteredCommits = visibleCommits(history.commits, commitFilterRules, appSettings.filter_logic)
   $: groupedSearchResults = groupSearchResultsByCommit(results)
+  $: selectedSearchResult = groupedSearchResults[selectedSearchIndex] ?? null
   $: selectedForInspector = detailOverride ?? historyDetail
   $: inspectorFileRevision = repository ? (historyAllBranches ? repository.default_branch : historyScope) : ''
   $: repositoryTransitioning = projectSwitching || worktreeSwitching
@@ -184,6 +190,7 @@
     resultAllRefs,
     executedDraft: executedSearchDraft ? cloneSearchDraft(executedSearchDraft) : null,
     hasSearched,
+    lastSearchedAt: searchLastSearchedAt || undefined,
     error: searchError,
   }
   $: searchSessionSummaries = searchSessions.map((session) => summarizeSearchSession(
@@ -200,6 +207,10 @@
 
   onMount(() => {
     readPaneWidths()
+    const stopSearchProgress = api.onSearchProgress((progress) => {
+      if (!searching || progress.request_id !== searchRequestID) return
+      searchProgress = progress
+    })
     const keydown = (event: KeyboardEvent) => {
       if (event.metaKey && event.key === ',') {
         event.preventDefault()
@@ -207,7 +218,10 @@
       }
     }
     window.addEventListener('keydown', keydown)
-    return () => window.removeEventListener('keydown', keydown)
+    return () => {
+      stopSearchProgress()
+      window.removeEventListener('keydown', keydown)
+    }
   })
 
   async function initialise(): Promise<void> {
@@ -243,8 +257,8 @@
     historyScope = initialHistoryScope ?? state.default_branch ?? 'HEAD'
     scope = 'HEAD'
     searchAllRefs = false
-    manualFilterRules = []
     activePresetIDs = []
+    historyFilterProgress = null
     clearSearchState()
     setStatus()
     projectSwitching = false
@@ -268,6 +282,8 @@
     const repositoryRoot = repository.root
     historyLoading = true
     historyLoadingMore = false
+    historyFilterProgress = null
+    historyLoadMorePromise = null
     setStatus()
     try {
       await tick()
@@ -282,7 +298,7 @@
         selectedCommit = ''
         historyDetail = null
       }
-      if (filterRules.some((rule) => rule.field === 'branch')) void loadHistoryBranches(filterRules)
+      if (filterRules.length > 0) void applyCommitFilters(filterRules, appSettings.filter_logic)
     } catch (error) {
       if (requestID !== historyRequestID || repository?.root !== repositoryRoot) return
       setStatus(errorText(error), 'error')
@@ -295,8 +311,19 @@
     }
   }
 
-  async function loadMoreHistory(): Promise<void> {
-    if (!repository || historyLoading || historyLoadingMore || history.commits.length >= history.total) return
+  function loadMoreHistory(): Promise<boolean> {
+    if (historyLoadMorePromise) return historyLoadMorePromise
+    if (!repository || historyLoading || history.commits.length >= history.total) return Promise.resolve(false)
+    const task = fetchMoreHistory()
+    historyLoadMorePromise = task
+    void task.then(() => {
+      if (historyLoadMorePromise === task) historyLoadMorePromise = null
+    })
+    return task
+  }
+
+  async function fetchMoreHistory(): Promise<boolean> {
+    if (!repository) return false
     const requestID = historyRequestID
     historyLoadingMore = true
     const repositoryRoot = repository.root
@@ -311,18 +338,28 @@
         limit: historyBatchSize(),
         skip: history.commits.length,
       })
-      if (requestID !== historyRequestID || repository?.root !== repositoryRoot || historyScope !== requestedScope || historyAllBranches !== requestedAllBranches || relatedHistoryScope() !== requestedRelatedScope) return
+      if (requestID !== historyRequestID || repository?.root !== repositoryRoot || historyScope !== requestedScope || historyAllBranches !== requestedAllBranches || relatedHistoryScope() !== requestedRelatedScope) return false
       const known = new Set(history.commits.map((commit) => commit.commit))
+      const appended = response.commits.filter((commit) => !known.has(commit.commit))
       history = {
         ...response,
-        commits: [...history.commits, ...response.commits.filter((commit) => !known.has(commit.commit))],
+        commits: [...history.commits, ...appended],
       }
       historyAutoLoadEnabled = true
+      return appended.length > 0
     } catch (error) {
       if (requestID === historyRequestID) setStatus(errorText(error), 'error')
+      return false
     } finally {
       if (requestID === historyRequestID) historyLoadingMore = false
     }
+  }
+
+  async function loadMoreHistoryForCurrentFilters(): Promise<void> {
+    const loaded = await loadMoreHistory()
+    if (!loaded) return
+    if (filterRules.some((rule) => rule.field === 'branch')) await loadHistoryBranches(filterRules)
+    reconcileVisibleSelection(filterRules, appSettings.filter_logic)
   }
 
   function historyBatchSize(): number {
@@ -452,14 +489,47 @@
     }
   }
 
-  function handleRulesChange(nextRules: CommitFilterRule[]): void {
-    manualFilterRules = nextRules
-    const combinedRules = [
-      ...nextRules,
-      ...resolvePresetRules(appSettings.presets, activePresetIDs, repository?.user ?? { name: '', email: '' }),
-    ]
-    if (combinedRules.some((rule) => rule.field === 'branch')) void loadHistoryBranches(combinedRules)
-    reconcileVisibleSelection(combinedRules.filter((rule) => !branchMembershipLoading || rule.field !== 'branch'), appSettings.filter_logic)
+  async function applyCommitFilters(rules: CommitFilterRule[], logic: CommitFilterLogic): Promise<void> {
+    const requestID = ++filterRequestID
+    if (rules.length === 0) {
+      historyFilterProgress = null
+      reconcileVisibleSelection(rules, logic)
+      return
+    }
+    const target = historyBatchSize()
+    if (visibleCommits(history.commits, rules, logic).length < target && history.commits.length < history.total) {
+      historyFilterProgress = commitFilterProgress(rules, target, logic)
+    }
+    if (rules.some((rule) => rule.field === 'branch')) await loadHistoryBranches(rules)
+    while (
+      requestID === filterRequestID
+      && visibleCommits(history.commits, rules, logic).length < target
+      && history.commits.length < history.total
+    ) {
+      historyFilterProgress = commitFilterProgress(rules, target, logic)
+      const loaded = await loadMoreHistory()
+      if (!loaded || requestID !== filterRequestID) break
+      if (rules.some((rule) => rule.field === 'branch')) await loadHistoryBranches(rules)
+    }
+    if (requestID === filterRequestID) {
+      historyFilterProgress = null
+      reconcileVisibleSelection(rules, logic)
+    }
+  }
+
+  function commitFilterProgress(rules: CommitFilterRule[], target: number, logic: CommitFilterLogic): HistoryFilterProgress {
+    const presets = appSettings.presets
+      .filter((preset) => activePresetIDs.includes(preset.id))
+      .map((preset) => preset.label)
+    return {
+      presets,
+      conditions: rules.map((rule) => `${actionLabel(rule.action)} ${rule.field}: ${rule.pattern}`),
+      scope: historyAllBranches ? 'All branches' : historyScope,
+      target,
+      visible: visibleCommits(history.commits, rules, logic).length,
+      scanned: history.commits.length,
+      total: history.total,
+    }
   }
 
   function reconcileVisibleSelection(rules: CommitFilterRule[], logic: CommitFilterLogic): void {
@@ -477,29 +547,7 @@
     activePresetIDs = activePresetIDs.includes(id)
       ? activePresetIDs.filter((activeID) => activeID !== id)
       : [...activePresetIDs, id]
-    const combinedRules = [
-      ...manualFilterRules,
-      ...resolvePresetRules(appSettings.presets, activePresetIDs, repository?.user ?? { name: '', email: '' }),
-    ]
-    if (combinedRules.some((rule) => rule.field === 'branch')) void loadHistoryBranches(combinedRules)
-    reconcileVisibleSelection(combinedRules.filter((rule) => !branchMembershipLoading || rule.field !== 'branch'), appSettings.filter_logic)
-  }
-
-  function addCommitFilter(action: CommitFilterAction, field: CommitFilterField, pattern: string): void {
-    const normalized = pattern.trim()
-    if (!normalized) return
-    const existing = manualFilterRules.find((rule) => rule.action === action && rule.field === field && rule.pattern === normalized)
-    if (existing) {
-      setStatus(`${actionLabel(action)} filter is already active.`, 'warning')
-      return
-    }
-    handleRulesChange([...manualFilterRules, {
-      id: `context-${Date.now()}-${Math.random()}`,
-      action,
-      field,
-      pattern: normalized,
-    }])
-    setStatus(`${actionLabel(action)} filter added · ${field}: ${normalized}`, 'success')
+    void applyCommitFilters(resolvePresetRules(appSettings.presets, activePresetIDs, repository?.user ?? { name: '', email: '' }), appSettings.filter_logic)
   }
 
   function actionLabel(action: CommitFilterAction): string {
@@ -551,6 +599,7 @@
     if (searching) void api.cancelSearch()
     historyLoading = false
     historyLoadingMore = false
+    historyFilterProgress = null
     branchMembershipLoading = false
     searching = false
     syncing = false
@@ -638,21 +687,12 @@
     saveAppSettings()
   }
 
-  function updateFilterLogic(logic: CommitFilterLogic): void {
-    appSettings = { ...appSettings, filter_logic: logic }
-    saveAppSettings()
-    reconcileVisibleSelection(filterRules, logic)
-  }
-
   function updatePresets(presets: CommitFilterPreset[]): void {
     const nextPresets = cloneFilterPresets(presets)
     appSettings = { ...appSettings, presets: nextPresets }
     activePresetIDs = activePresetIDs.filter((id) => nextPresets.some((preset) => preset.id === id))
     saveAppSettings()
-    reconcileVisibleSelection([
-      ...manualFilterRules,
-      ...resolvePresetRules(nextPresets, activePresetIDs, repository?.user ?? { name: '', email: '' }),
-    ], appSettings.filter_logic)
+    void applyCommitFilters(resolvePresetRules(nextPresets, activePresetIDs, repository?.user ?? { name: '', email: '' }), appSettings.filter_logic)
   }
 
   function resetPresets(): void {
@@ -690,16 +730,12 @@
       const ide = ['vscode', 'cursor', 'zed', 'idea', 'xcode'].includes(parsed.ide) ? parsed.ide as IDEPreference : 'vscode'
       const terminal = ['terminal', 'iterm2', 'warp', 'ghostty', 'wezterm'].includes(parsed.terminal) ? parsed.terminal as TerminalPreference : 'terminal'
       const changedFilesView = parsed.changed_files_view === 'tree' ? 'tree' : 'list'
-      const filterLogic: CommitFilterLogic = {
-        show: parsed.filter_logic?.show === 'or' ? 'or' : 'and',
-        hide: parsed.filter_logic?.hide === 'and' ? 'and' : 'or',
-      }
       return {
         history_batch_size: [0, 50, 100, 200, 500].includes(value) ? value : 0,
         ide,
         terminal,
         changed_files_view: changedFilesView,
-        filter_logic: filterLogic,
+        filter_logic: { ...defaultFilterLogic },
         presets: readFilterPresets(parsed.presets),
         remote_badges: readRemoteBadgeRules(parsed.remote_badges),
       }
@@ -711,7 +747,7 @@
   function readFilterPresets(value: unknown): CommitFilterPreset[] {
     if (value === undefined) return defaultFilterPresets()
     if (!Array.isArray(value)) return defaultFilterPresets()
-    const actions: CommitFilterAction[] = ['highlight', 'hide', 'show']
+    const actions: CommitFilterAction[] = ['hide', 'show']
     const fields: CommitFilterField[] = ['branch', 'author', 'message', 'file', 'date']
     return value.flatMap((candidate, presetIndex) => {
       if (!candidate || typeof candidate !== 'object') return []
@@ -730,7 +766,7 @@
           pattern: rule.pattern,
         }]
       })
-      return [{ id, label, rules }]
+      return rules.length > 0 ? [{ id, label, rules }] : []
     })
   }
 
@@ -852,11 +888,7 @@
   }
 
   function removeSearchPattern(index: number): void {
-    if (index < 0 || index >= patterns.length) return
-    const remaining = patterns.filter((_, patternIndex) => patternIndex !== index)
-    patterns = remaining.map((pattern, patternIndex) => patternIndex === 0
-      ? { source: pattern.source, value: pattern.value }
-      : pattern)
+    patterns = removeSearchPatternAt(patterns, index)
   }
 
   function changeSearchScope(nextScope: string, nextAllRefs: boolean): void {
@@ -905,6 +937,7 @@
       resultAllRefs: false,
       executedDraft: null,
       hasSearched: false,
+      lastSearchedAt: undefined,
       error: '',
     }
     searchSessions = [...searchSessions, session]
@@ -921,7 +954,9 @@
       return
     }
     if (searchSessions.length === 0) {
-      createSearchSession()
+      navigatorView = 'search'
+      activeSearchSessionID = ''
+      resetSearchWorkspace()
       return
     }
     await selectSearchSession(activeSearchSessionID || searchSessions[0].id, true)
@@ -976,6 +1011,7 @@
       resultAllRefs,
       executedDraft: executedSearchDraft ? cloneSearchDraft(executedSearchDraft) : null,
       hasSearched,
+      lastSearchedAt: searchLastSearchedAt || session.lastSearchedAt,
       error: searchError,
     }
   }
@@ -996,14 +1032,55 @@
     resultAllRefs = session.resultAllRefs
     executedSearchDraft = session.executedDraft ? cloneSearchDraft(session.executedDraft) : null
     hasSearched = session.hasSearched
+    searchLastSearchedAt = session.lastSearchedAt ?? ''
     searchError = session.error
+  }
+
+  function resetSearchWorkspace(): void {
+    const draft = blankSearchDraft()
+    patterns = draft.patterns
+    engine = draft.engine
+    scope = draft.scope
+    searchAllRefs = draft.allRefs
+    author = draft.author
+    since = draft.since
+    until = draft.until
+    results = []
+    selectedSearchIndex = -1
+    scanned = 0
+    resultScope = 'HEAD'
+    resultAllRefs = false
+    executedSearchDraft = null
+    hasSearched = false
+    searchLastSearchedAt = ''
+    searchError = ''
+  }
+
+  function renameSearchSession(id: string, title: string): void {
+    searchSessions = searchSessions.map((session) => session.id === id ? { ...session, title: title.slice(0, 80) } : session)
+  }
+
+  async function removeSearchSession(id: string): Promise<void> {
+    const index = searchSessions.findIndex((session) => session.id === id)
+    if (index < 0) return
+    if (id === activeSearchSessionID && searching) await cancelSearch()
+    const remaining = searchSessions.filter((session) => session.id !== id)
+    const next = remaining[Math.min(index, remaining.length - 1)]
+    searchSessions = remaining
+    if (id !== activeSearchSessionID) return
+    activeSearchSessionID = ''
+    if (next) {
+      await selectSearchSession(next.id, true)
+    } else {
+      resetSearchWorkspace()
+    }
   }
 
   function summarizeSearchSession(session: SearchSessionState, running = false) {
     const project = projects.find((candidate) => candidate.root === session.projectRoot)?.name
       ?? session.projectRoot.split('/').filter(Boolean).at(-1)
       ?? ''
-    const status: SearchSessionStatus = running
+    const status: SearchSessionStatus | undefined = running
       ? 'running'
       : session.error
         ? 'error'
@@ -1011,14 +1088,15 @@
           ? 'stale'
           : session.executedDraft
             ? 'ready'
-            : 'draft'
+            : undefined
     return {
       id: session.id,
       title: session.title,
       project,
-      query: session.draft.patterns.map((pattern, index) => `${index > 0 ? `${(pattern.join ?? 'or').toUpperCase()} ` : ''}${pattern.source.toUpperCase()}: ${pattern.value}`).join(' '),
+      query: session.draft.patterns.map(searchPatternText).join(' '),
       status,
       result_count: searchResultCommitCount(session.results),
+      last_searched_at: session.lastSearchedAt,
     }
   }
 
@@ -1044,7 +1122,7 @@
         draft: { ...preserved.draft, scope: state.branch || 'HEAD', allRefs: false },
         results: [], selectedIndex: -1, scanned: 0,
         resultScope: 'HEAD', resultAllRefs: false,
-        executedDraft: null, hasSearched: false, error: '',
+        executedDraft: null, hasSearched: false, lastSearchedAt: undefined, error: '',
       }
       searchSessions = searchSessions.map((session) => session.id === retargeted.id ? retargeted : session)
       restoreSearchSession(retargeted)
@@ -1083,6 +1161,7 @@
         resultAllRefs: false,
         executedDraft: null,
         hasSearched: false,
+        lastSearchedAt: undefined,
         error: '',
       }
       searchSessions = searchSessions.map((session) => session.id === retargeted.id ? retargeted : session)
@@ -1097,8 +1176,9 @@
     }
   }
 
-  function searchRequest(): SearchRequest {
+  function searchRequest(requestID: number): SearchRequest {
     return {
+      request_id: requestID,
       patterns: patterns.map((pattern) => ({ ...pattern })),
       engine,
       scope: scope.trim() || 'HEAD',
@@ -1124,12 +1204,19 @@
       setStatus('Complete or remove empty Search conditions.', 'warning')
       return
     }
+    const expressionError = searchExpressionError(patterns)
+    if (expressionError) {
+      setStatus(expressionError, 'warning')
+      return
+    }
     const draft = cloneSearchDraft(searchDraft)
-    const request = searchRequest()
+    const requestID = ++searchRequestID
+    const request = searchRequest(requestID)
+    searchLastSearchedAt = new Date().toISOString()
     searching = true
+    searchProgress = { request_id: requestID, scanned: 0, total: 0 }
     searchError = ''
     setStatus()
-    const requestID = ++searchRequestID
     const repositoryRoot = repository.root
     try {
       const response = await api.search(request)
@@ -1151,6 +1238,7 @@
     } finally {
       if (requestID === searchRequestID) {
         searching = false
+        searchProgress = null
         storeActiveSearchSession()
       }
     }
@@ -1159,6 +1247,7 @@
   async function cancelSearch(): Promise<void> {
     if (!searching) return
     searchRequestID++
+    searchProgress = null
     try {
       await api.cancelSearch()
     } finally {
@@ -1177,6 +1266,7 @@
     resultAllRefs = false
     executedSearchDraft = null
     searchError = ''
+    searchProgress = null
     detailOverride = null
   }
 
@@ -1234,11 +1324,33 @@
     document.querySelector<HTMLInputElement>('[data-pattern-input]')?.focus()
   }
 
-  async function selectInspectorFile(path: string): Promise<void> {
+  async function selectInspectorFile(path: string): Promise<CommitDetail | undefined> {
     if (!selectedForInspector || !path) return
     try {
-      detailOverride = await api.commitDetail(selectedForInspector.commit, path)
+      const detail = await api.commitDetail(selectedForInspector.commit, path)
+      detailOverride = detail
+      return detail
     } catch (error) {
+      setStatus(errorText(error), 'error')
+    }
+  }
+
+  function selectSearchResult(index: number): void {
+    if (selectedSearchIndex !== index) detailRequestID++
+    selectedSearchIndex = index
+  }
+
+  async function selectSearchInspectorFile(path: string): Promise<CommitDetail | undefined> {
+    const selected = selectedSearchResult
+    if (!selected || !path) return
+    const commit = selected.commit
+    const requestID = ++detailRequestID
+    try {
+      const detail = await api.commitDetail(commit, path)
+      if (requestID !== detailRequestID || selectedSearchResult?.commit !== commit) return
+      return detail
+    } catch (error) {
+      if (requestID !== detailRequestID || selectedSearchResult?.commit !== commit) return
       setStatus(errorText(error), 'error')
     }
   }
@@ -1345,19 +1457,15 @@
           currentHead={repository?.head ?? ''}
           {activeProjectRoot}
           activeWorktreeRoot={repository?.root ?? ''}
-          rules={manualFilterRules}
           presets={appSettings.presets}
           {activePresetIDs}
           author={repository?.user ?? { name: '', email: '' }}
-          logic={appSettings.filter_logic}
           disabled={!repository || historyLoading || repositoryTransitioning}
           {canEditCommits}
           {editDisabledReason}
           onScopeChange={(nextScope, nextAllBranches) => void changeHistoryScope(nextScope, nextAllBranches)}
           onWorktreeChange={(worktree) => void selectWorktree(worktree)}
           onOpenCommitEditor={() => void openCommitEditor()}
-          onRulesChange={handleRulesChange}
-          onLogicChange={updateFilterLogic}
           onTogglePreset={togglePreset}
         />
 
@@ -1372,12 +1480,12 @@
           {selectedCommit}
           loading={historyLoading}
           loadingMore={historyLoadingMore}
+          filterProgress={historyFilterProgress}
           hasMore={history.commits.length < history.total}
           autoLoad={historyAutoLoadEnabled}
           branchPoint={history.branch_point ?? ''}
           onSelect={(commit) => void selectCommit(commit)}
-          onLoadMore={() => void loadMoreHistory()}
-          onAddFilter={addCommitFilter}
+          onLoadMore={() => void loadMoreHistoryForCurrentFilters()}
           onSearchMessage={(message) => void addPatternSearch('msg', message)}
           onUseSearchAuthor={(value) => void useSearchAuthor(value)}
         />
@@ -1398,7 +1506,6 @@
         onOpenTerminal={(path) => void openInTerminal(path)}
         onOpenExternalURL={(url) => void openExternalURL(url)}
         onSelectFile={selectInspectorFile}
-        onAddFilter={(action, path) => addCommitFilter(action, 'file', path)}
         onAddFileSearch={(path) => void addPatternSearch('file', path)}
         onLoadTree={loadRepositoryTree}
       />
@@ -1432,14 +1539,18 @@
         results={groupedSearchResults}
         bind:selectedIndex={selectedSearchIndex}
         {searching}
+        {searchProgress}
         {hasSearched}
         stale={searchStale}
         applied={Boolean(executedSearchDraft)}
         {scanned}
         error={searchError}
         disabled={repositoryTransitioning}
+        {inspectorWidth}
         onNewSession={() => createSearchSession()}
         onSelectSession={(id) => void selectSearchSession(id)}
+        onRenameSession={renameSearchSession}
+        onRemoveSession={(id) => void removeSearchSession(id)}
         onRegisterProject={() => void chooseSearchProject()}
         onSelectProject={(project) => void selectSearchProject(project)}
         onToggleProjectFavorite={(project) => void toggleProjectFavorite(project)}
@@ -1448,7 +1559,28 @@
         onRunSearch={() => void runSearch()}
         onCancelSearch={() => void cancelSearch()}
         onRemovePattern={removeSearchPattern}
-      />
+        onSelectResult={selectSearchResult}
+        onStartInspectorResize={startPaneResize}
+        onResizeInspectorWithKeyboard={resizePaneWithKeyboard}
+      >
+        <Inspector
+          slot="inspector"
+          selected={selectedSearchResult}
+          fileRevision={selectedSearchResult?.commit ?? resultScope}
+          allUsesDefault={false}
+          defaultChangedFilesView={appSettings.changed_files_view}
+          remotes={repository?.remotes ?? []}
+          defaultBranch={repository?.default_branch ?? ''}
+          upstream={repository?.upstream ?? ''}
+          onOpenIDE={(path) => void openFileInIDE(path)}
+          onOpenFinder={(path) => void revealFile(path)}
+          onOpenTerminal={(path) => void openInTerminal(path)}
+          onOpenExternalURL={(url) => void openExternalURL(url)}
+          onSelectFile={selectSearchInspectorFile}
+          onAddFileSearch={(path) => void addPatternSearch('file', path)}
+          onLoadTree={loadRepositoryTree}
+        />
+      </SearchWorkspace>
     {/if}
   </div>
 

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Pattern } from '../lib/types'
+  import { searchPatternText } from '../lib/search-expression'
 
   export let patterns: Pattern[] = []
   export let stale = false
@@ -19,7 +20,8 @@
         {#if index > 0}
           <span class="search-criteria-join">{(pattern.join ?? 'or').toUpperCase()}</span>
         {/if}
-        <span class="search-criteria-chip source-{pattern.source}" title={`${sourceLabel(pattern.source)} ${pattern.value}`}>
+        {#if pattern.open_groups}<span class="search-criteria-join">{'('.repeat(pattern.open_groups)}</span>{/if}
+        <span class="search-criteria-chip source-{pattern.source}" title={searchPatternText(pattern, index)}>
           <strong>{sourceLabel(pattern.source)}</strong>
           <code>{pattern.value}</code>
           <button
@@ -28,11 +30,12 @@
             aria-label="Remove {sourceLabel(pattern.source)} pattern from the next search"
           >×</button>
         </span>
+        {#if pattern.close_groups}<span class="search-criteria-join">{')'.repeat(pattern.close_groups)}</span>{/if}
       {/each}
       {#if stale}
-        <span class="search-criteria-chip source-diff" role="status" title="Search draft changed after these results were produced">
-          <strong>Draft</strong>
-          <code>Changes not applied</code>
+        <span class="search-criteria-chip source-diff" role="status" title="Conditions changed after these results were produced">
+          <strong>Changed</strong>
+          <code>Run Search to update results</code>
         </span>
       {:else if applied}
         <span class="search-criteria-chip" role="status" title="These patterns produced the current results">

@@ -13,26 +13,29 @@ import (
 )
 
 type SearchOptions struct {
-	Predicates   []SearchPredicate
-	Messages     []string
-	Diffs        []string
-	Files        []string
-	Engine       string
-	FollowRename bool
-	Revision     string
-	All          bool
-	Paths        []string
-	Author       string
-	Since        string
-	Until        string
-	Limit        int
-	Context      int
+	Predicates     []SearchPredicate
+	Messages       []string
+	Diffs          []string
+	Files          []string
+	Engine         string
+	FollowRename   bool
+	Revision       string
+	All            bool
+	Paths          []string
+	Author         string
+	Since          string
+	Until          string
+	Limit          int
+	Context        int
+	OmitResultDiff bool
 }
 
 type SearchPredicate struct {
-	Source string
-	Value  string
-	Join   string
+	Source      string
+	Value       string
+	Join        string
+	OpenGroups  int
+	CloseGroups int
 }
 
 type Author struct {
@@ -47,11 +50,20 @@ type FileChange struct {
 }
 
 type SearchMatch struct {
-	Author       Author     `json:"author"`
-	Commit       string     `json:"commit"`
-	File         FileChange `json:"file"`
-	Diff         string     `json:"diff"`
-	MatchSources []string   `json:"match_sources,omitempty"`
+	Author       Author       `json:"author"`
+	Commit       string       `json:"commit"`
+	Message      string       `json:"message"`
+	Date         string       `json:"date"`
+	Refs         []string     `json:"refs,omitempty"`
+	File         FileChange   `json:"file"`
+	Files        []FileChange `json:"files"`
+	Diff         string       `json:"diff"`
+	MatchSources []string     `json:"match_sources,omitempty"`
+}
+
+type SearchProgress struct {
+	Scanned int `json:"scanned"`
+	Total   int `json:"total"`
 }
 
 type SearchResponse struct {
@@ -62,6 +74,7 @@ type SearchResponse struct {
 	FollowRename    bool          `json:"follow_rename,omitempty"`
 	Results         []SearchMatch `json:"results"`
 	Count           int           `json:"count"`
+	Scanned         int           `json:"scanned"`
 }
 
 type SearchService struct {
@@ -76,6 +89,8 @@ type commitMeta struct {
 	OID     string
 	Author  Author
 	Message string
+	Date    string
+	Refs    []string
 }
 
 type compiledSearchPredicate struct {
@@ -84,7 +99,13 @@ type compiledSearchPredicate struct {
 	trackedPaths map[string]bool
 }
 
+const searchCommitBatchSize = 500
+
 func (s *SearchService) Search(ctx context.Context, options SearchOptions) (SearchResponse, error) {
+	return s.SearchWithProgress(ctx, options, nil)
+}
+
+func (s *SearchService) SearchWithProgress(ctx context.Context, options SearchOptions, onProgress func(SearchProgress)) (SearchResponse, error) {
 	if options.Engine == "" {
 		options.Engine = "glob"
 	}
@@ -123,58 +144,81 @@ func (s *SearchService) Search(ctx context.Context, options SearchOptions) (Sear
 	}
 
 	results := make([]SearchMatch, 0, min(options.Limit, 32))
-	for _, commit := range commits {
-		changes, changeErr := s.fileChanges(ctx, commit.OID, options.Paths)
+	progressStep := max(1, (len(commits)+199)/200)
+	visited := 0
+	for batchStart := 0; batchStart < len(commits); batchStart += searchCommitBatchSize {
+		batchEnd := min(batchStart+searchCommitBatchSize, len(commits))
+		batch := commits[batchStart:batchEnd]
+		oids := make([]string, len(batch))
+		for index := range batch {
+			oids[index] = batch[index].OID
+		}
+		changesByCommit, changeErr := ReadCommitFileChangesBatch(ctx, s.repo, oids, options.Paths, false)
 		if changeErr != nil {
 			return SearchResponse{}, searchGitError("read changed files", changeErr)
 		}
-		for _, change := range changes {
-			hits := make([]bool, len(predicates))
-			for index := range predicates {
-				switch predicates[index].Source {
-				case "msg":
-					hits[index] = predicates[index].matcher(commit.Message)
-				case "file":
-					hits[index] = matchFileChange(change, predicates[index].matcher, options.FollowRename, predicates[index].trackedPaths)
-				}
+		for _, commit := range batch {
+			if err := ctx.Err(); err != nil {
+				return SearchResponse{}, err
 			}
-			if eligibleCommits != nil && !eligibleCommits[commit.OID] {
-				continue
+			visited++
+			if onProgress != nil && (visited == 1 || visited == len(commits) || visited%progressStep == 0) {
+				onProgress(SearchProgress{Scanned: visited, Total: len(commits)})
 			}
-			if !hasDiffPredicate && !evaluateSearchExpression(predicates, hits) {
-				continue
-			}
-			diff, diffErr := s.fileDiff(ctx, commit.OID, change, options.Context)
-			if diffErr != nil {
-				return SearchResponse{}, searchGitError("read file diff", diffErr)
-			}
-			if hasDiffPredicate {
-				lines := changedLines(diff)
+			for _, change := range changesByCommit[commit.OID] {
+				hits := make([]bool, len(predicates))
 				for index := range predicates {
-					if predicates[index].Source == "diff" {
-						hits[index] = predicates[index].matcher(lines)
+					switch predicates[index].Source {
+					case "msg":
+						hits[index] = predicates[index].matcher(commit.Message)
+					case "file":
+						hits[index] = matchFileChange(change, predicates[index].matcher, options.FollowRename, predicates[index].trackedPaths)
 					}
 				}
-			}
-			if !evaluateSearchExpression(predicates, hits) {
-				continue
-			}
-			sources := make([]string, 0, 3)
-			for index, predicate := range predicates {
-				if hits[index] && !slices.Contains(sources, predicate.Source) {
-					sources = append(sources, predicate.Source)
+				if eligibleCommits != nil && !eligibleCommits[commit.OID] {
+					continue
 				}
-			}
-			results = append(results, SearchMatch{
-				Author: commit.Author, Commit: commit.OID, File: change,
-				Diff: diff, MatchSources: sources,
-			})
-			if len(results) >= options.Limit {
-				return searchResponse(options, results), nil
+				if !hasDiffPredicate && !evaluateSearchExpression(predicates, hits) {
+					continue
+				}
+				diff := ""
+				if hasDiffPredicate || !options.OmitResultDiff {
+					var diffErr error
+					diff, diffErr = s.fileDiff(ctx, commit.OID, change, options.Context)
+					if diffErr != nil {
+						return SearchResponse{}, searchGitError("read file diff", diffErr)
+					}
+				}
+				if hasDiffPredicate {
+					lines := changedLines(diff)
+					for index := range predicates {
+						if predicates[index].Source == "diff" {
+							hits[index] = predicates[index].matcher(lines)
+						}
+					}
+				}
+				if !evaluateSearchExpression(predicates, hits) {
+					continue
+				}
+				sources := make([]string, 0, 3)
+				for index, predicate := range predicates {
+					if hits[index] && !slices.Contains(sources, predicate.Source) {
+						sources = append(sources, predicate.Source)
+					}
+				}
+				results = append(results, SearchMatch{
+					Author: commit.Author, Commit: commit.OID, Message: commit.Message,
+					Date: commit.Date, Refs: append([]string(nil), commit.Refs...), File: change,
+					Files: append([]FileChange(nil), changesByCommit[commit.OID]...),
+					Diff:  diff, MatchSources: sources,
+				})
+				if len(results) >= options.Limit {
+					return searchResponse(options, results, visited), nil
+				}
 			}
 		}
 	}
-	return searchResponse(options, results), nil
+	return searchResponse(options, results, visited), nil
 }
 
 func validateSearchOptions(options SearchOptions) error {
@@ -214,7 +258,7 @@ func validateSearchOptions(options SearchOptions) error {
 }
 
 func (s *SearchService) listCommits(ctx context.Context, options SearchOptions) ([]commitMeta, error) {
-	args := []string{"log", "--date-order", "-z", "--format=%H%x00%an%x00%ae%x00%B"}
+	args := []string{"log", "--date-order", "-z", "--date=iso-strict", "--format=%H%x00%an%x00%ae%x00%aI%x00%B%x00%D"}
 	args = append(args, searchFilterArgs(options)...)
 	args = append(args, searchScopeArgs(options)...)
 	if len(options.Paths) > 0 {
@@ -229,18 +273,20 @@ func (s *SearchService) listCommits(ctx context.Context, options SearchOptions) 
 	if len(fields) > 0 && len(fields[len(fields)-1]) == 0 {
 		fields = fields[:len(fields)-1]
 	}
-	if len(fields)%4 != 0 {
+	if len(fields)%6 != 0 {
 		return nil, fmt.Errorf("unexpected git log field count %d", len(fields))
 	}
-	commits := make([]commitMeta, 0, len(fields)/4)
-	for index := 0; index < len(fields); index += 4 {
+	commits := make([]commitMeta, 0, len(fields)/6)
+	for index := 0; index < len(fields); index += 6 {
 		commits = append(commits, commitMeta{
 			OID: string(fields[index]),
 			Author: Author{
 				Name:  string(fields[index+1]),
 				Email: string(fields[index+2]),
 			},
-			Message: strings.TrimRight(string(fields[index+3]), "\n"),
+			Date:    string(fields[index+3]),
+			Message: strings.TrimSpace(string(fields[index+4])),
+			Refs:    parseSearchDecorations(string(fields[index+5])),
 		})
 	}
 	return commits, nil
@@ -270,23 +316,57 @@ func searchFilterArgs(options SearchOptions) []string {
 	return args
 }
 
-func (s *SearchService) fileChanges(ctx context.Context, oid string, paths []string) ([]FileChange, error) {
-	args := []string{"diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-z", "-M", oid}
+// ReadCommitFileChangesBatch asks one Git process for the changed-file metadata
+// of a bounded commit batch. With --stdin, diff-tree emits each commit OID
+// before its NUL-delimited name-status records, so filenames remain lossless.
+func ReadCommitFileChangesBatch(ctx context.Context, repo *gitexec.Repository, commits, paths []string, firstParent bool) (map[string][]FileChange, error) {
+	result := make(map[string][]FileChange, len(commits))
+	if len(commits) == 0 {
+		return result, nil
+	}
+	var input strings.Builder
+	for _, oid := range commits {
+		oid = strings.TrimSpace(oid)
+		if oid == "" || strings.ContainsRune(oid, 0) || strings.ContainsRune(oid, '\n') {
+			return nil, fmt.Errorf("invalid commit object id %q", oid)
+		}
+		input.WriteString(oid)
+		input.WriteByte('\n')
+		result[oid] = []FileChange{}
+	}
+	args := []string{"diff-tree", "--stdin", "--root", "--name-status", "-r", "-z", "-M"}
+	if firstParent {
+		args = append(args, "-m", "--first-parent")
+	}
 	if len(paths) > 0 {
 		args = append(args, "--")
 		args = append(args, paths...)
 	}
-	out, err := s.repo.Run(ctx, nil, args...)
+	out, err := repo.Run(ctx, strings.NewReader(input.String()), args...)
 	if err != nil {
 		return nil, err
 	}
 	tokens := bytes.Split(out, []byte{0})
-	changes := make([]FileChange, 0, len(tokens)/2)
+	currentOID := ""
 	for index := 0; index < len(tokens); {
-		status := string(tokens[index])
+		token := string(tokens[index])
 		index++
-		if status == "" {
+		if token == "" {
 			continue
+		}
+		if isGitObjectID(token) {
+			if _, requested := result[token]; !requested {
+				return nil, fmt.Errorf("unexpected commit object id %q in diff-tree output", token)
+			}
+			currentOID = token
+			continue
+		}
+		if currentOID == "" {
+			return nil, fmt.Errorf("changed-file status %q appeared before a commit object id", token)
+		}
+		status := token
+		if !isFileChangeStatus(status) {
+			return nil, fmt.Errorf("unexpected changed-file status %q", status)
 		}
 		if index >= len(tokens) {
 			return nil, fmt.Errorf("missing path for status %q", status)
@@ -295,14 +375,38 @@ func (s *SearchService) fileChanges(ctx context.Context, oid string, paths []str
 			if index+1 >= len(tokens) {
 				return nil, fmt.Errorf("missing rename paths for status %q", status)
 			}
-			changes = append(changes, FileChange{Status: status, OldPath: string(tokens[index]), Path: string(tokens[index+1])})
+			result[currentOID] = append(result[currentOID], FileChange{Status: status, OldPath: string(tokens[index]), Path: string(tokens[index+1])})
 			index += 2
 			continue
 		}
-		changes = append(changes, FileChange{Status: status, Path: string(tokens[index])})
+		result[currentOID] = append(result[currentOID], FileChange{Status: status, Path: string(tokens[index])})
 		index++
 	}
-	return changes, nil
+	return result, nil
+}
+
+func isGitObjectID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			return false
+		}
+	}
+	return true
+}
+
+func isFileChangeStatus(value string) bool {
+	if value == "" || !strings.ContainsRune("ACDMRTUXB", rune(value[0])) {
+		return false
+	}
+	for _, character := range value[1:] {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *SearchService) fileDiff(ctx context.Context, oid string, change FileChange, contextLines int) (string, error) {
@@ -321,7 +425,7 @@ func (s *SearchService) fileDiff(ctx context.Context, oid string, change FileCha
 	return strings.TrimRight(string(out), "\n"), nil
 }
 
-func searchResponse(options SearchOptions, results []SearchMatch) SearchResponse {
+func searchResponse(options SearchOptions, results []SearchMatch, scanned int) SearchResponse {
 	messages, diffs, files := searchPatternsBySource(options)
 	return SearchResponse{
 		MessagePatterns: messages,
@@ -331,7 +435,21 @@ func searchResponse(options SearchOptions, results []SearchMatch) SearchResponse
 		FollowRename:    options.FollowRename,
 		Results:         results,
 		Count:           len(results),
+		Scanned:         scanned,
 	}
+}
+
+func parseSearchDecorations(value string) []string {
+	refs := make([]string, 0)
+	for _, ref := range strings.Split(value, ",") {
+		ref = strings.TrimSpace(ref)
+		ref = strings.TrimPrefix(ref, "HEAD -> ")
+		if ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	slices.Sort(refs)
+	return refs
 }
 
 func compileSearchPredicates(options SearchOptions) ([]compiledSearchPredicate, error) {
@@ -388,7 +506,24 @@ func normalizedSearchPredicates(options SearchOptions) ([]SearchPredicate, error
 		} else if join != "and" && join != "or" {
 			return nil, apperr.New("invalid_arguments", fmt.Sprintf("unsupported search join %q", predicate.Join), apperr.ExitUsage, nil)
 		}
-		normalized = append(normalized, SearchPredicate{Source: source, Value: strings.TrimSpace(predicate.Value), Join: join})
+		if predicate.OpenGroups < 0 || predicate.CloseGroups < 0 || predicate.OpenGroups > 8 || predicate.CloseGroups > 8 {
+			return nil, apperr.New("invalid_arguments", "search parenthesis count must be between zero and eight", apperr.ExitUsage, nil)
+		}
+		normalized = append(normalized, SearchPredicate{
+			Source: source, Value: strings.TrimSpace(predicate.Value), Join: join,
+			OpenGroups: predicate.OpenGroups, CloseGroups: predicate.CloseGroups,
+		})
+	}
+	balance := 0
+	for _, predicate := range normalized {
+		balance += predicate.OpenGroups
+		balance -= predicate.CloseGroups
+		if balance < 0 {
+			return nil, apperr.New("invalid_arguments", "search parentheses close before they are opened", apperr.ExitUsage, nil)
+		}
+	}
+	if balance != 0 {
+		return nil, apperr.New("invalid_arguments", "search parentheses are not balanced", apperr.ExitUsage, nil)
 	}
 	return normalized, nil
 }
@@ -397,17 +532,54 @@ func evaluateSearchExpression(predicates []compiledSearchPredicate, hits []bool)
 	if len(predicates) == 0 || len(predicates) != len(hits) {
 		return false
 	}
-	matched := false
-	groupMatched := hits[0]
-	for index := 1; index < len(predicates); index++ {
-		if predicates[index].Join == "and" {
-			groupMatched = groupMatched && hits[index]
-			continue
+	values := make([]bool, 0, len(hits))
+	operators := make([]string, 0, len(hits))
+	apply := func() {
+		operator := operators[len(operators)-1]
+		operators = operators[:len(operators)-1]
+		right := values[len(values)-1]
+		left := values[len(values)-2]
+		values = values[:len(values)-2]
+		if operator == "and" {
+			values = append(values, left && right)
+		} else {
+			values = append(values, left || right)
 		}
-		matched = matched || groupMatched
-		groupMatched = hits[index]
 	}
-	return matched || groupMatched
+	precedence := func(operator string) int {
+		if operator == "and" {
+			return 2
+		}
+		return 1
+	}
+	for index, predicate := range predicates {
+		if index > 0 {
+			for len(operators) > 0 && operators[len(operators)-1] != "(" && precedence(operators[len(operators)-1]) >= precedence(predicate.Join) {
+				apply()
+			}
+			operators = append(operators, predicate.Join)
+		}
+		for range predicate.OpenGroups {
+			operators = append(operators, "(")
+		}
+		values = append(values, hits[index])
+		for range predicate.CloseGroups {
+			for len(operators) > 0 && operators[len(operators)-1] != "(" {
+				apply()
+			}
+			if len(operators) == 0 {
+				return false
+			}
+			operators = operators[:len(operators)-1]
+		}
+	}
+	for len(operators) > 0 {
+		if operators[len(operators)-1] == "(" {
+			return false
+		}
+		apply()
+	}
+	return len(values) == 1 && values[0]
 }
 
 func searchPatternsBySource(options SearchOptions) (messages, diffs, files []string) {

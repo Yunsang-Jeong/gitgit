@@ -10,12 +10,12 @@ export function groupSearchResultsByCommit(results: SearchResult[]): SearchResul
         refs: result.refs ? [...result.refs] : undefined,
         files: [...result.files],
         match_sources: [...result.match_sources],
-        matched_files: [cloneFile(result.file)],
+        matched_files: hasFileLevelMatch(result) ? [cloneFile(result.file)] : [],
       })
       continue
     }
     existing.match_sources = appendUnique(existing.match_sources, result.match_sources)
-    if (!existing.matched_files?.some((file) => fileKey(file) === fileKey(result.file))) {
+    if (hasFileLevelMatch(result) && !existing.matched_files?.some((file) => fileKey(file) === fileKey(result.file))) {
       existing.matched_files = [...(existing.matched_files ?? []), cloneFile(result.file)]
     }
   }
@@ -36,6 +36,10 @@ function appendUnique(current: PatternSource[], incoming: PatternSource[]): Patt
 
 function cloneFile(file: FileChange): FileChange {
   return { ...file }
+}
+
+function hasFileLevelMatch(result: SearchResult): boolean {
+  return result.match_sources.some((source) => source === 'file' || source === 'diff')
 }
 
 function fileKey(file: FileChange): string {

@@ -7,20 +7,50 @@ import (
 )
 
 func (s *Service) beginOperation(parent context.Context) (context.Context, func()) {
+	return s.beginOperationWithKey(parent, "")
+}
+
+// beginLatestOperation keeps at most one active operation for a read surface.
+// Starting a newer request cancels the Git subprocesses owned by the older
+// request instead of merely discarding its response in the frontend.
+func (s *Service) beginLatestOperation(parent context.Context, key string) (context.Context, func()) {
+	return s.beginOperationWithKey(parent, key)
+}
+
+func (s *Service) beginOperationWithKey(parent context.Context, key string) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	s.mu.Lock()
 	if s.operations == nil {
 		s.operations = make(map[uint64]context.CancelFunc)
 	}
+	if s.latestOperations == nil {
+		s.latestOperations = make(map[string]uint64)
+	}
+	var previousCancel context.CancelFunc
+	if key != "" {
+		if previousID, ok := s.latestOperations[key]; ok {
+			previousCancel = s.operations[previousID]
+			delete(s.operations, previousID)
+		}
+	}
 	s.nextOperationID++
 	id := s.nextOperationID
 	s.operations[id] = cancel
+	if key != "" {
+		s.latestOperations[key] = id
+	}
 	s.mu.Unlock()
+	if previousCancel != nil {
+		previousCancel()
+	}
 
 	return ctx, func() {
 		cancel()
 		s.mu.Lock()
 		delete(s.operations, id)
+		if key != "" && s.latestOperations[key] == id {
+			delete(s.latestOperations, key)
+		}
 		s.mu.Unlock()
 	}
 }
@@ -55,6 +85,7 @@ func (s *Service) beginReservedRepositorySwitch(parent context.Context, generati
 		s.searchCancel = nil
 	}
 	s.operations = make(map[uint64]context.CancelFunc)
+	s.latestOperations = make(map[string]uint64)
 	s.searchID++
 	s.switchingRepository = true
 	s.nextOperationID++
@@ -104,6 +135,7 @@ func (s *Service) CancelOperations() {
 		s.searchCancel = nil
 	}
 	s.operations = make(map[uint64]context.CancelFunc)
+	s.latestOperations = make(map[string]uint64)
 	s.searchID++
 	s.mu.Unlock()
 	for _, cancel := range cancels {

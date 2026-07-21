@@ -15,6 +15,7 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"github.com/yunsang/gitgit/internal/app"
 	desktopcore "github.com/yunsang/gitgit/internal/desktop"
 )
 
@@ -35,6 +36,12 @@ type ProjectDiscoveryResult struct {
 	Added     int                             `json:"added"`
 	Canceled  bool                            `json:"canceled"`
 	Projects  []desktopcore.RegisteredProject `json:"projects"`
+}
+
+type SearchProgressEvent struct {
+	RequestID uint64 `json:"request_id"`
+	Scanned   int    `json:"scanned"`
+	Total     int    `json:"total"`
 }
 
 func NewDesktopApp() *DesktopApp {
@@ -223,7 +230,14 @@ func (a *DesktopApp) SyncRemotes() (desktopcore.RemoteSyncResult, error) {
 }
 
 func (a *DesktopApp) Search(request desktopcore.SearchRequest) (desktopcore.SearchResponse, error) {
-	return a.service.Search(a.appContext(), request)
+	ctx := a.appContext()
+	return a.service.SearchWithProgress(ctx, request, func(progress app.SearchProgress) {
+		runtime.EventsEmit(ctx, "search:progress", SearchProgressEvent{
+			RequestID: request.RequestID,
+			Scanned:   progress.Scanned,
+			Total:     progress.Total,
+		})
+	})
 }
 
 func (a *DesktopApp) History(request desktopcore.HistoryRequest) (desktopcore.HistoryResponse, error) {

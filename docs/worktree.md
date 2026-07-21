@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: worktree
-last_updated: 2026-07-20
+last_updated: 2026-07-21
 ---
 
 # Worktree Module
@@ -82,7 +82,7 @@ Removal은 되돌리기 어려운 operation이다. Confirmation에는 제거할 
 
 Default branch는 remote symbolic ref, primary worktree branch와 deterministic local-ref fallback을 이용해 탐지한다. 각 attached worktree의 branch가 default branch에 merge되었는지는 Git ancestry를 기준으로 계산한다.
 
-Remote fetch 결과가 필요한 최신 merge 상태는 사용자가 상단 `Sync`를 실행한 뒤 갱신된다. `Sync`는 remotes를 fetch하고 prune하지만 worktree나 branch를 자동 제거하지 않는다.
+Remote fetch는 Commit 화면의 상단 `Sync`에서 명시적으로 실행한다. `Sync`는 remotes를 fetch하고 prune하지만 worktree나 branch를 자동 제거하지 않는다. Worktree 화면에서는 실수로 network operation을 시작하지 않도록 `Sync`를 disabled 상태로 표시하며, local repository state는 `Refresh`로 다시 읽을 수 있다.
 
 ## Sparse-checkout
 

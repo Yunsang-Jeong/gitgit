@@ -1,4 +1,4 @@
-import type { CommitDetail, CommitEditStack, CommitFileContent, HistoryBranchesResponse, HistoryRequest, HistoryResponse, ProjectDiscoveryResult, RegisteredProject, RemoteSyncResult, RepositoryState, RepositoryTreeResponse, RewriteCommitsRequest, RewriteCommitsResponse, SearchRequest, SearchResponse } from './types'
+import type { CommitDetail, CommitEditStack, CommitFileContent, HistoryBranchesResponse, HistoryRequest, HistoryResponse, ProjectDiscoveryResult, RegisteredProject, RemoteSyncResult, RepositoryState, RepositoryTreeResponse, RewriteCommitsRequest, RewriteCommitsResponse, SearchProgress, SearchRequest, SearchResponse } from './types'
 
 type Backend = {
   Version: () => Promise<string>
@@ -37,6 +37,9 @@ declare global {
         DesktopApp?: Backend
       }
     }
+    runtime?: {
+      EventsOnMultiple: (eventName: string, callback: (...data: unknown[]) => void, maxCallbacks: number) => () => void
+    }
   }
 }
 
@@ -67,6 +70,10 @@ export const api = {
   rewriteCommits: (request: RewriteCommitsRequest) => backend().RewriteCommits(request),
   repositoryTree: (revision: string, directory = '') => backend().RepositoryTree(revision, directory),
   search: (request: SearchRequest) => backend().Search(request),
+  onSearchProgress: (callback: (progress: SearchProgress) => void) => {
+    if (!window.runtime) return () => undefined
+    return window.runtime.EventsOnMultiple('search:progress', (progress) => callback(progress as SearchProgress), -1)
+  },
   cancelSearch: () => backend().CancelSearch(),
   openFile: (path: string) => backend().OpenFile(path),
   openFileInIDE: (path: string, ide: string) => backend().OpenFileInIDE(path, ide),

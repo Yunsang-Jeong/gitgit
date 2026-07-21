@@ -2,14 +2,13 @@
   import { tick } from 'svelte'
   import ContextMenu from './ContextMenu.svelte'
   import { changedDirectoryPaths, changedFilesSignature, changedFileStatusMap } from '../lib/changed-files'
-  import type { CommitFilterAction, ContextMenuItem, FileChange, RepositoryTreeEntry, RepositoryTreeResponse } from '../lib/types'
+  import type { ContextMenuItem, FileChange, RepositoryTreeEntry, RepositoryTreeResponse } from '../lib/types'
 
   export let revision = ''
   export let allUsesDefault = false
   export let changedFiles: FileChange[] = []
   export let onLoadTree: (revision: string, directory: string) => Promise<RepositoryTreeResponse>
   export let onCopyPath: (path: string) => void
-  export let onAddFilter: (action: CommitFilterAction, path: string) => void
   export let onAddSearch: (path: string) => void
   export let onOpenFinder: (path: string) => void
   export let onOpenTerminal: (path: string) => void
@@ -149,17 +148,12 @@
     return 'Unable to load this repository tree.'
   }
 
-  function filterPattern(node: TreeNode): string {
+  function searchPattern(node: TreeNode): string {
     return node.object_type === 'tree' ? `${node.path}/**` : node.path
   }
 
   function openContextMenu(event: MouseEvent, node: TreeNode): void {
-    const pattern = filterPattern(node)
-    const filterItems = (['hide', 'show', 'highlight'] as CommitFilterAction[]).map((action, index) => ({
-      label: `Add filter: ${action[0].toLocaleUpperCase()}${action.slice(1)}`,
-      separatorBefore: index === 0,
-      run: () => onAddFilter(action, pattern),
-    }))
+    const pattern = searchPattern(node)
     contextMenu = {
       x: event.clientX,
       y: event.clientY,
@@ -167,7 +161,6 @@
       targetPath: node.path,
       items: [
         { label: 'Copy path', run: () => onCopyPath(node.path) },
-        ...filterItems,
         { label: 'Add search', separatorBefore: true, run: () => onAddSearch(pattern) },
         { label: 'Open Finder', separatorBefore: true, run: () => onOpenFinder(node.path) },
         { label: 'Open Terminal', run: () => onOpenTerminal(node.path) },
@@ -199,7 +192,7 @@
         {@const node = visible.node}
         {#if node.object_type === 'tree'}
           <button
-            class="repository-tree-row directory"
+            class="repository-tree-row directory context-action"
             type="button"
             role="treeitem"
             aria-level={visible.depth + 1}
@@ -218,7 +211,7 @@
           </button>
           {#if node.error}<div class="repository-tree-error" style={`padding-left: ${10 + (visible.depth + 1) * 16}px`}>{node.error}</div>{/if}
         {:else}
-          <button class:changed={Boolean(changedStatuses[node.path])} class:interaction-active={contextMenu?.targetPath === node.path} class="repository-tree-row file" type="button" role="treeitem" aria-level={visible.depth + 1} aria-selected="false" aria-label={changedStatuses[node.path] ? `${node.path}, ${changedStatuses[node.path]} in selected commit` : node.path} title={changedStatuses[node.path] ? `${node.path} · changed in selected commit` : `Copy ${node.path}`} style={`padding-left: ${10 + visible.depth * 16}px`} on:click={() => onCopyPath(node.path)} on:contextmenu|preventDefault={(event) => openContextMenu(event, node)}>
+          <button class:changed={Boolean(changedStatuses[node.path])} class:interaction-active={contextMenu?.targetPath === node.path} class="repository-tree-row file context-action" type="button" role="treeitem" aria-level={visible.depth + 1} aria-selected="false" aria-label={changedStatuses[node.path] ? `${node.path}, ${changedStatuses[node.path]} in selected commit` : node.path} title={changedStatuses[node.path] ? `${node.path} · changed in selected commit` : `Copy ${node.path}`} style={`padding-left: ${10 + visible.depth * 16}px`} on:click={() => onCopyPath(node.path)} on:contextmenu|preventDefault={(event) => openContextMenu(event, node)}>
             <span class="tree-chevron-spacer"></span>
             {#if node.object_type === 'commit'}
               <svg class="tree-entry-icon submodule" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5.5 8 2.5l5 3v5l-5 3-5-3zM8 8.3v5.2M3.2 5.6 8 8.3l4.8-2.7" /></svg>

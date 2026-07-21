@@ -5,6 +5,8 @@ export interface Pattern {
   source: PatternSource
   value: string
   join?: SearchPatternJoin
+  open_groups?: number
+  close_groups?: number
 }
 
 export interface Author {
@@ -100,6 +102,7 @@ export type ChangedFilesView = 'list' | 'tree'
 export type NavigatorView = 'commit' | 'worktrees' | 'search'
 
 export interface SearchRequest {
+  request_id: number
   patterns: Pattern[]
   engine: string
   scope: string
@@ -110,6 +113,12 @@ export interface SearchRequest {
   follow_rename: boolean
   limit: number
   context: number
+}
+
+export interface SearchProgress {
+  request_id: number
+  scanned: number
+  total: number
 }
 
 export interface SearchResult {
@@ -126,15 +135,16 @@ export interface SearchResult {
   matched_files?: FileChange[]
 }
 
-export type SearchSessionStatus = 'draft' | 'running' | 'ready' | 'stale' | 'error'
+export type SearchSessionStatus = 'running' | 'ready' | 'stale' | 'error'
 
 export interface SearchSessionSummary {
   id: string
   title: string
   project: string
   query: string
-  status: SearchSessionStatus
+  status?: SearchSessionStatus
   result_count: number
+  last_searched_at?: string
 }
 
 export interface SearchResponse {
@@ -251,7 +261,7 @@ export interface RewriteCommitsResponse {
 }
 
 export type CommitFilterField = 'branch' | 'author' | 'message' | 'file' | 'date'
-export type CommitFilterAction = 'highlight' | 'hide' | 'show'
+export type CommitFilterAction = 'hide' | 'show'
 export type CommitFilterJoin = 'and' | 'or'
 
 export interface CommitFilterLogic {
@@ -270,6 +280,16 @@ export interface CommitFilterPreset {
   id: string
   label: string
   rules: CommitFilterRule[]
+}
+
+export interface HistoryFilterProgress {
+  presets: string[]
+  conditions: string[]
+  scope: string
+  target: number
+  visible: number
+  scanned: number
+  total: number
 }
 
 export interface ContextMenuItem {

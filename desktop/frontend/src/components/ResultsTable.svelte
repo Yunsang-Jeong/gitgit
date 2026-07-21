@@ -1,50 +1,39 @@
 <script lang="ts">
-  import { isCommitHighlighted } from '../lib/history'
   import { formatDate } from '../lib/datetime'
   import { defaultFirstRefs } from '../lib/remotes'
-  import type { CommitFilterRule, SearchResult } from '../lib/types'
+  import type { SearchResult } from '../lib/types'
 
   export let results: SearchResult[] = []
   export let selectedIndex = -1
   export let searching = false
   export let hasSearched = false
   export let hasPreviousResults = false
-  export let rules: CommitFilterRule[] = []
   export let filteredOut = false
   export let error = ''
   export let defaultBranch = ''
   export let onRetry: () => void
+  export let onSelect: (index: number) => void
 
   function displayMessage(message: string): string {
     return message.split('\n')[0]
   }
 
-  function displayFile(result: SearchResult): string {
-    const matchedFiles = result.matched_files ?? [result.file]
-    if (matchedFiles.length > 1) return `${matchedFiles.length} changed files`
-    const file = matchedFiles[0]
-    return file.old_path ? `${file.old_path} → ${file.path}` : file.path
-  }
-
-  function displayFileTitle(result: SearchResult): string {
-    return (result.matched_files ?? [result.file])
-      .map((file) => file.old_path ? `${file.old_path} → ${file.path}` : file.path)
-      .join('\n')
-  }
-
   function sourceLabel(source: string): string {
     return source === 'msg' ? 'Message' : source.toUpperCase()
+  }
+
+  function selectResult(index: number): void {
+    selectedIndex = index
+    onSelect(index)
   }
 </script>
 
 <div class="results-table" role="table" aria-label="Search results">
   <div class="results-header result-grid" role="row">
-    <span aria-label="Topology"></span>
     <span>Commit</span>
     <span>Message</span>
     <span>Author</span>
     <span>Date</span>
-    <span>File</span>
     <span>Match</span>
   </div>
   <div class="results-body">
@@ -95,21 +84,23 @@
         {@const refs = defaultFirstRefs(result.refs, defaultBranch)}
         <button
           class:selected={selectedIndex === index}
-          class:highlighted={isCommitHighlighted(result, rules)}
           class="result-row result-grid"
           type="button"
           role="row"
-          on:click={() => (selectedIndex = index)}
+          on:click={() => selectResult(index)}
         >
-          <span class="topology-cell" role="cell"><i class="lane-dot"></i></span>
-          <span class="commit-cell" role="cell">
-            <code>{result.short_commit}</code>
-            {#if refs.length}<small>{refs[0]}</small>{/if}
+          <span class="commit-cell" role="cell"><code>{result.short_commit}</code></span>
+          <span class="message-cell" role="cell" title={result.message}>
+            <strong>{displayMessage(result.message)}</strong>
+            {#if refs.length}
+              <span class="result-ref-list">
+                {#each refs.slice(0, 2) as ref}<small title={ref}>{ref}</small>{/each}
+                {#if refs.length > 2}<small title={refs.slice(2).join('\n')}>+{refs.length - 2}</small>{/if}
+              </span>
+            {/if}
           </span>
-          <span class="message-cell" role="cell" title={result.message}>{displayMessage(result.message)}</span>
           <span role="cell">{result.author.name}</span>
           <span role="cell">{formatDate(result.date)}</span>
-          <span class="file-cell" role="cell" title={displayFileTitle(result)}>{displayFile(result)}</span>
           <span class="match-cell" role="cell">
             {#each result.match_sources as source}
               <b class="source-{source}">{sourceLabel(source)}</b>

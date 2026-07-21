@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: gate
 scope: development
-last_updated: 2026-07-20
+last_updated: 2026-07-21
 ---
 
 # Development and Browser Verification
@@ -28,6 +28,8 @@ make dev-browser
 
 기본 Wails devserver URL은 `http://localhost:34116`이다. Codex에서 작업할 때는 sidebar browser에서 이 URL을 연다. `make dev`는 같은 target의 alias다.
 
+Wails browser bridge도 Go binding과 application lifecycle을 제공하기 위해 development app process를 실행한다. `make dev-browser`는 development 전용 environment를 전달해 native window를 처음부터 숨기므로 별도 app 창은 열리지 않는다. Process 자체를 종료하면 browser bridge도 함께 중단된다.
+
 Port가 사용 중이면 명시적으로 바꾼다.
 
 ```sh
@@ -37,6 +39,20 @@ make dev-browser WAILS_DEVSERVER=localhost:34117
 이 경우 browser에도 `http://localhost:34117`을 연다. Vite가 출력하는 `http://127.0.0.1:5173`은 사용하지 않는다. Raw Vite page에는 Wails runtime과 Go binding이 없으므로 실제 application flow를 검증할 수 없다.
 
 이미 같은 repository를 위한 devserver가 실행 중이면 재사용한다. 불필요한 duplicate process를 만들지 않는다.
+
+## Make와 toolchain
+
+GitGit의 Make target은 macOS 전용이다. 다른 OS에서는 target을 실행하기 전에 명확한 오류로 종료한다. Bundle platform은 `darwin/arm64`로 고정하지 않고 현재 macOS host의 architecture를 사용하며, `check-native`도 같은 architecture를 검증한다.
+
+Make는 시작 시 `npm`의 absolute path를 찾고 Wails child process의 `PATH` 앞에 그 directory를 전달한다. GUI shell처럼 login shell과 `PATH`가 다른 환경에서는 다음처럼 명시할 수 있다.
+
+```sh
+make build NPM=/opt/homebrew/bin/npm
+```
+
+Release bundle은 Make가 `npm ci`와 `npm run build`를 먼저 실행한 뒤 Wails에는 `-s`로 이미 생성된 frontend artifact를 넘긴다. `-ldflags`는 Go version metadata에만 사용하며 `npm` 탐색이나 `PATH`를 변경하지 않는다.
+
+일상적인 build, native check, install과 development server는 성공, 실패 또는 중단 시 `desktop/build/bin`을 정리한다. Install 도중 사용하는 hidden staging app도 같은 방식으로 제거한다. 보존 가능한 app bundle 자체가 필요한 경우에만 `make bundle`을 명시적으로 실행한다. 따라서 Spotlight에서 실행 대상으로 선택할 app은 `$HOME/Applications/GitGit.app`이며, repository 내부의 `desktop/build/bin/GitGit.app`은 `make bundle`을 실행한 경우에만 존재한다.
 
 ## Required gate
 
@@ -55,6 +71,7 @@ Product code 또는 test를 변경하는 작업은 다음 순서를 따른다.
 - Repository, worktree, history, search, editing처럼 UI가 노출하는 domain behavior
 - Product behavior를 새로 정의하거나 변경하는 test
 - Loading, cancellation, generation, session처럼 화면 전환에 따라 달라지는 비동기 behavior
+- Git process batching, scope cache와 progress event처럼 read 성능이나 process lifetime을 바꾸는 behavior
 
 ## 통과 기준
 
@@ -65,6 +82,7 @@ Product code 또는 test를 변경하는 작업은 다음 순서를 따른다.
 - Normal state와 변경에 직접 관련된 empty, loading, error, disabled state를 확인한다.
 - Project, worktree, branch, Search session 전환이 관련된 경우 선택과 결과가 올바르게 함께 바뀐다.
 - Browser 확인 뒤에도 targeted test와 정적 검증이 통과한다.
+- History/Search 최적화는 결과 동등성뿐 아니라 page당 `diff-tree --stdin` batch 수, 중복 count/metadata command 제거와 이전 request cancellation test를 함께 통과한다.
 - 최종 보고에 browser URL, 확인한 flow, 사용한 repository 또는 fixture, 자동화 검증 결과를 남긴다.
 
 다음 항목만으로는 gate를 통과하지 않는다.
@@ -95,4 +113,4 @@ Observed: 핵심 결과
 Automated checks: 실행한 command와 결과
 ```
 
-이 browser bridge는 development 전용이다. Release artifact의 native WebView와 signing 검증은 `make check`와 `make check-native`가 별도로 담당한다.
+이 browser bridge는 development 전용이다. Release artifact의 native WebView와 signing 검증은 `make check`와 `make check-native`가 별도로 담당하며 검증용 bundle은 완료 후 제거한다.

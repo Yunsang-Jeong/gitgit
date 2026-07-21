@@ -17,12 +17,15 @@ import (
 )
 
 type Pattern struct {
-	Source string `json:"source"`
-	Value  string `json:"value"`
-	Join   string `json:"join,omitempty"`
+	Source      string `json:"source"`
+	Value       string `json:"value"`
+	Join        string `json:"join,omitempty"`
+	OpenGroups  int    `json:"open_groups,omitempty"`
+	CloseGroups int    `json:"close_groups,omitempty"`
 }
 
 type SearchRequest struct {
+	RequestID    uint64    `json:"request_id"`
 	Patterns     []Pattern `json:"patterns"`
 	Engine       string    `json:"engine"`
 	Scope        string    `json:"scope"`
@@ -143,6 +146,7 @@ type Service struct {
 	switchingRepository  bool
 	repositoryGeneration uint64
 	operations           map[uint64]context.CancelFunc
+	latestOperations     map[string]uint64
 	nextOperationID      uint64
 	searchCancel         context.CancelFunc
 	searchID             uint64
@@ -161,10 +165,11 @@ func NewServiceWithCache(runner *gitexec.Runner, persistentCache *PersistentCach
 		runner = gitexec.NewRunner()
 	}
 	return &Service{
-		runner:          runner,
-		operations:      make(map[uint64]context.CancelFunc),
-		caches:          make(map[string]*repositoryCache),
-		persistentCache: persistentCache,
+		runner:           runner,
+		operations:       make(map[uint64]context.CancelFunc),
+		latestOperations: make(map[string]uint64),
+		caches:           make(map[string]*repositoryCache),
+		persistentCache:  persistentCache,
 	}
 }
 
@@ -378,7 +383,7 @@ func canonicalWorktreePath(path string) string {
 }
 
 func (s *Service) History(ctx context.Context, request HistoryRequest) (HistoryResponse, error) {
-	operationContext, finish := s.beginOperation(ctx)
+	operationContext, finish := s.beginLatestOperation(ctx, "history")
 	defer finish()
 	repository, err := s.currentRepository()
 	if err != nil {
@@ -408,21 +413,6 @@ func (s *Service) History(ctx context.Context, request HistoryRequest) (HistoryR
 			return HistoryResponse{}, err
 		}
 	}
-	branchPoint, branchPointParents, err := historyBranchPoint(operationContext, repository, scope, relatedScope)
-	if err != nil {
-		return HistoryResponse{}, err
-	}
-	if relatedScope != "" && branchPoint == "" {
-		relatedScope = ""
-	}
-	allRevisions := []string(nil)
-	allowedRemoteRefs := map[string]bool(nil)
-	if all {
-		allRevisions, allowedRemoteRefs, err = historyAllRevisions(operationContext, repository)
-		if err != nil {
-			return HistoryResponse{}, fmt.Errorf("resolve All branches history refs: %w", err)
-		}
-	}
 	fingerprint, err := repositoryFingerprint(operationContext, repository)
 	if err != nil {
 		return HistoryResponse{}, err
@@ -435,6 +425,43 @@ func (s *Service) History(ctx context.Context, request HistoryRequest) (HistoryR
 		}
 		headIdentity = strings.TrimSpace(string(head))
 	}
+	scopeCacheKey := historyScopeCacheKey(repository.Root, scope, relatedScope, headIdentity, all)
+	scopeContext, cachedScope := s.cachedHistoryScope(repository.CommonDir, fingerprint, scopeCacheKey)
+	if !cachedScope {
+		branchPoint, branchPointParents, branchErr := historyBranchPoint(operationContext, repository, scope, relatedScope)
+		if branchErr != nil {
+			return HistoryResponse{}, branchErr
+		}
+		if relatedScope != "" && branchPoint == "" {
+			relatedScope = ""
+		}
+		allRevisions := []string(nil)
+		allowedRemoteRefs := map[string]bool(nil)
+		if all {
+			allRevisions, allowedRemoteRefs, err = historyAllRevisions(operationContext, repository)
+			if err != nil {
+				return HistoryResponse{}, fmt.Errorf("resolve All branches history refs: %w", err)
+			}
+		}
+		total, countErr := countHistoryCommits(operationContext, repository, scope, relatedScope, allRevisions)
+		if countErr != nil {
+			return HistoryResponse{}, fmt.Errorf("count commit history: %w", countErr)
+		}
+		branches, branchErr := readBranches(operationContext, repository)
+		if branchErr != nil {
+			return HistoryResponse{}, fmt.Errorf("list branches: %w", branchErr)
+		}
+		scopeContext = historyScopeContext{
+			relatedScope: relatedScope, branchPoint: branchPoint, branchPointParents: branchPointParents,
+			allRevisions: allRevisions, allowedRemoteRefs: allowedRemoteRefs, total: total, branches: branches,
+		}
+		s.storeHistoryScope(repository.CommonDir, fingerprint, scopeCacheKey, scopeContext)
+	}
+	relatedScope = scopeContext.relatedScope
+	branchPoint := scopeContext.branchPoint
+	branchPointParents := scopeContext.branchPointParents
+	allRevisions := scopeContext.allRevisions
+	allowedRemoteRefs := scopeContext.allowedRemoteRefs
 	cacheKey := historyCacheKey(request, scope, relatedScope, headIdentity, all, allRevisions)
 	if cached, ok := s.cachedHistory(repository.CommonDir, fingerprint, cacheKey); ok {
 		return cached, nil
@@ -472,21 +499,21 @@ func (s *Service) History(ctx context.Context, request HistoryRequest) (HistoryR
 	if all {
 		filterRemoteDecorations(commits, allowedRemoteRefs)
 	}
+	commitOIDs := make([]string, len(commits))
 	for index := range commits {
-		commits[index].Files, err = readCommitFiles(operationContext, repository, commits[index].Commit)
-		if err != nil {
-			return HistoryResponse{}, fmt.Errorf("read changed files for %s: %w", commits[index].ShortCommit, err)
-		}
+		commitOIDs[index] = commits[index].Commit
 	}
-	total, err := countHistoryCommits(operationContext, repository, scope, relatedScope, allRevisions)
+	filesByCommit, err := app.ReadCommitFileChangesBatch(operationContext, repository, commitOIDs, nil, true)
 	if err != nil {
-		return HistoryResponse{}, fmt.Errorf("count commit history: %w", err)
+		return HistoryResponse{}, fmt.Errorf("read history changed files: %w", err)
 	}
-	branches, err := readBranches(operationContext, repository)
-	if err != nil {
-		return HistoryResponse{}, fmt.Errorf("list branches: %w", err)
+	for index := range commits {
+		commits[index].Files = filesByCommit[commits[index].Commit]
 	}
-	response := HistoryResponse{Scope: scope, AllBranches: all, Total: total, BranchPoint: branchPoint, Branches: branches, Commits: commits}
+	response := HistoryResponse{
+		Scope: scope, AllBranches: all, Total: scopeContext.total,
+		BranchPoint: branchPoint, Branches: scopeContext.branches, Commits: commits,
+	}
 	s.storeHistory(repository.CommonDir, fingerprint, cacheKey, response)
 	return response, nil
 }
@@ -512,7 +539,7 @@ func historyBranchPoint(ctx context.Context, repository *gitexec.Repository, sco
 }
 
 func (s *Service) HistoryBranches(ctx context.Context, commits []string) (HistoryBranchesResponse, error) {
-	operationContext, finish := s.beginOperation(ctx)
+	operationContext, finish := s.beginLatestOperation(ctx, "history-branches")
 	defer finish()
 	repository, err := s.currentRepository()
 	if err != nil {
@@ -580,7 +607,7 @@ func (s *Service) HistoryBranches(ctx context.Context, commits []string) (Histor
 }
 
 func (s *Service) CommitDetail(ctx context.Context, oid, filePath string) (CommitDetail, error) {
-	operationContext, finish := s.beginOperation(ctx)
+	operationContext, finish := s.beginLatestOperation(ctx, "commit-detail")
 	defer finish()
 	repository, err := s.currentRepository()
 	if err != nil {
@@ -635,6 +662,8 @@ func (s *Service) CommitDetail(ctx context.Context, oid, filePath string) (Commi
 }
 
 func (s *Service) RepositoryTree(ctx context.Context, revision, directory string) (RepositoryTreeResponse, error) {
+	// A single tree view may expand several sibling directories concurrently.
+	// Keep those reads independent; repository switches still cancel them all.
 	operationContext, finish := s.beginOperation(ctx)
 	defer finish()
 	repository, err := s.currentRepository()
@@ -724,6 +753,10 @@ func parseRepositoryTree(data []byte, directory string) ([]RepositoryTreeEntry, 
 }
 
 func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
+	return s.SearchWithProgress(ctx, request, nil)
+}
+
+func (s *Service) SearchWithProgress(ctx context.Context, request SearchRequest, onProgress func(app.SearchProgress)) (SearchResponse, error) {
 	operationContext, finish := s.beginOperation(ctx)
 	defer finish()
 	repository, err := s.currentRepository()
@@ -753,49 +786,27 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		s.mu.Unlock()
 	}()
 
-	scanned, err := countCommits(searchContext, repository, options)
-	if err != nil {
-		return SearchResponse{}, fmt.Errorf("count search scope: %w", err)
-	}
-	response, err := app.NewSearchService(repository).Search(searchContext, options)
+	response, err := app.NewSearchService(repository).SearchWithProgress(searchContext, options, onProgress)
 	if err != nil {
 		return SearchResponse{}, err
 	}
 
-	metadata := make(map[string]commitMetadata)
-	files := make(map[string][]app.FileChange)
 	results := make([]SearchResult, 0, len(response.Results))
 	for _, match := range response.Results {
-		meta, ok := metadata[match.Commit]
-		if !ok {
-			meta, err = readCommitMetadata(searchContext, repository, match.Commit)
-			if err != nil {
-				return SearchResponse{}, fmt.Errorf("read commit metadata: %w", err)
-			}
-			metadata[match.Commit] = meta
-		}
-		commitFiles, ok := files[match.Commit]
-		if !ok {
-			commitFiles, err = readCommitFiles(searchContext, repository, match.Commit)
-			if err != nil {
-				return SearchResponse{}, fmt.Errorf("read changed files: %w", err)
-			}
-			files[match.Commit] = commitFiles
-		}
 		results = append(results, SearchResult{
 			Author:       match.Author,
 			Commit:       match.Commit,
 			ShortCommit:  shortOID(match.Commit),
-			Message:      meta.Message,
-			Date:         meta.Date,
-			Refs:         meta.Refs,
+			Message:      match.Message,
+			Date:         match.Date,
+			Refs:         match.Refs,
 			File:         match.File,
-			Files:        commitFiles,
+			Files:        match.Files,
 			Diff:         match.Diff,
 			MatchSources: match.MatchSources,
 		})
 	}
-	return SearchResponse{Scope: scope, AllRefs: options.All, Scanned: scanned, Count: len(results), Results: results}, nil
+	return SearchResponse{Scope: scope, AllRefs: options.All, Scanned: response.Scanned, Count: len(results), Results: results}, nil
 }
 
 func (s *Service) CancelSearch() {
@@ -872,13 +883,14 @@ func (s *Service) snapshot(ctx context.Context, repository *gitexec.Repository) 
 
 func searchOptions(request SearchRequest) (app.SearchOptions, string, error) {
 	options := app.SearchOptions{
-		Engine:       strings.ToLower(strings.TrimSpace(request.Engine)),
-		Author:       strings.TrimSpace(request.Author),
-		Since:        strings.TrimSpace(request.Since),
-		Until:        strings.TrimSpace(request.Until),
-		FollowRename: request.FollowRename,
-		Limit:        request.Limit,
-		Context:      request.Context,
+		Engine:         strings.ToLower(strings.TrimSpace(request.Engine)),
+		Author:         strings.TrimSpace(request.Author),
+		Since:          strings.TrimSpace(request.Since),
+		Until:          strings.TrimSpace(request.Until),
+		FollowRename:   request.FollowRename,
+		Limit:          request.Limit,
+		Context:        request.Context,
+		OmitResultDiff: true,
 	}
 	if options.Engine == "" {
 		options.Engine = "glob"
@@ -916,7 +928,10 @@ func searchOptions(request SearchRequest) (app.SearchOptions, string, error) {
 		} else if join != "and" && join != "or" {
 			return app.SearchOptions{}, "", fmt.Errorf("unsupported search join %q", pattern.Join)
 		}
-		options.Predicates = append(options.Predicates, app.SearchPredicate{Source: source, Value: value, Join: join})
+		options.Predicates = append(options.Predicates, app.SearchPredicate{
+			Source: source, Value: value, Join: join,
+			OpenGroups: pattern.OpenGroups, CloseGroups: pattern.CloseGroups,
+		})
 	}
 	if len(options.Messages)+len(options.Diffs)+len(options.Files) == 0 {
 		return app.SearchOptions{}, "", errors.New("add at least one message, diff, or file pattern")
@@ -934,37 +949,6 @@ func searchOptions(request SearchRequest) (app.SearchOptions, string, error) {
 		options.Revision = scope
 	}
 	return options, scope, nil
-}
-
-func countCommits(ctx context.Context, repository *gitexec.Repository, options app.SearchOptions) (int, error) {
-	args := []string{"rev-list", "--count"}
-	if options.Author != "" {
-		args = append(args, "--author="+options.Author)
-	}
-	if options.Since != "" {
-		args = append(args, "--since-as-filter="+options.Since)
-	}
-	if options.Until != "" {
-		args = append(args, "--until="+options.Until)
-	}
-	if options.All {
-		args = append(args, "--all")
-	} else if options.Revision != "" {
-		args = append(args, "--end-of-options", options.Revision)
-	} else {
-		args = append(args, "--end-of-options", "HEAD")
-	}
-	out, err := repository.Run(ctx, nil, args...)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.Atoi(strings.TrimSpace(string(out)))
-}
-
-type commitMetadata struct {
-	Message string
-	Date    string
-	Refs    []string
 }
 
 func normalizeHistoryScope(value string, allBranches bool) (string, bool) {
@@ -1289,22 +1273,6 @@ func readCommitDiff(ctx context.Context, repository *gitexec.Repository, oid str
 		return "", fmt.Errorf("read commit diff: %w", err)
 	}
 	return strings.TrimRight(string(out), "\n"), nil
-}
-
-func readCommitMetadata(ctx context.Context, repository *gitexec.Repository, oid string) (commitMetadata, error) {
-	out, err := repository.Run(ctx, nil, "show", "-s", "--date=iso-strict", "--format=%B%x00%aI%x00%D", oid)
-	if err != nil {
-		return commitMetadata{}, err
-	}
-	fields := bytes.SplitN(bytes.TrimRight(out, "\n"), []byte{0}, 3)
-	if len(fields) != 3 {
-		return commitMetadata{}, fmt.Errorf("unexpected metadata field count %d", len(fields))
-	}
-	return commitMetadata{
-		Message: strings.TrimSpace(string(fields[0])),
-		Date:    strings.TrimSpace(string(fields[1])),
-		Refs:    parseDecorations(string(fields[2])),
-	}, nil
 }
 
 func readCommitFiles(ctx context.Context, repository *gitexec.Repository, oid string) ([]app.FileChange, error) {

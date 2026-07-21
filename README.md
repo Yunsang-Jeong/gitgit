@@ -10,7 +10,7 @@
 
 요구 환경:
 
-- Apple Silicon Mac, macOS 11 이상
+- macOS 11 이상을 실행하는 Mac
 - Go 1.26.x
 - Node.js 22.12 이상과 npm
 - `worktree --porcelain -z`, `sparse-checkout check-rules`를 지원하는 Git
@@ -18,6 +18,8 @@
 ```sh
 $ make install
 ```
+
+실행할 GUI app은 `$HOME/Applications/GitGit.app` 하나다. `make install`은 이 app을 교체한 뒤 중간 build bundle을 삭제한다.
 
 ## Docs
 
@@ -27,7 +29,7 @@ $ make install
 | --- | --- |
 | [Development Gate](docs/development.md) | `wails dev` browser-first 개발·검증 절차와 통과 기준 |
 | [Overview](docs/overview.md) | 프로젝트 개요, 방향성, architecture, 현재 구현 상태 |
-| [Commit](docs/commit.md) | Commit 화면, history 범위, Filter, Inspector, commit editing |
+| [Commit](docs/commit.md) | Commit 화면, history 범위, Preset, Inspector, commit editing |
 | [Worktree](docs/worktree.md) | worktree 모델, 표시 상태, 선택과 제거 규칙 |
 | [Search](docs/search.md) | Search session, AND/OR query, scope, 결과와 비용 모델 |
 
@@ -55,3 +57,7 @@ make check
 ```
 
 Product code나 test를 변경할 때는 Wails browser bridge에서 대상 flow를 먼저 확인하고, 자동화 검증 뒤 같은 flow를 다시 확인한다. 상세 기준과 예외는 [Development Gate](docs/development.md)를 따른다. `make dev`는 `make dev-browser`의 alias다.
+
+Make target은 macOS에서만 실행된다. Build는 현재 Mac의 architecture를 따르며, GUI 환경에서 npm 경로를 찾지 못하면 `make build NPM=/absolute/path/to/npm`처럼 지정할 수 있다.
+
+기본 `make`와 `make build`, `make check`, `make install`, `make dev-browser`는 종료할 때 `desktop/build/bin`의 임시 app bundle을 정리한다. 실제 local bundle을 보존해야 할 때만 `make bundle`을 사용하며, 결과는 `desktop/build/bin/GitGit.app`에 남는다.

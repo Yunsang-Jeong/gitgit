@@ -60,6 +60,9 @@ func (r *Runner) RunWithEnv(ctx context.Context, dir string, stdin io.Reader, en
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, &CommandError{Args: commandArgs, Stderr: stderr.String(), Err: err}
 	}
 	return stdout.Bytes(), nil

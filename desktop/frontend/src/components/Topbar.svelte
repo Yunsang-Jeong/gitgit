@@ -27,9 +27,7 @@
     <button class:selected={view === 'search'} type="button" on:click={() => onViewChange('search')}>Search</button>
   </nav>
 
-  {#if view === 'search'}
-    <div class="topbar-workspace-context"><span>Workspace</span><strong>Search sessions</strong></div>
-  {:else}
+  {#if view !== 'search'}
     <ProjectSwitcher
       {projects}
       {activeProjectRoot}
@@ -40,12 +38,16 @@
     />
   {/if}
 
-  <button class="toolbar-action remote-sync-action" class:spinning={syncing} type="button" on:click={onSync} disabled={!repository || syncing || refreshing || transitioning} title="Fetch all remotes and prune deleted refs">
+  {#if view === 'search'}
+    <span class="topbar-spacer"></span>
+  {/if}
+
+  <button class="toolbar-action remote-sync-action" class:spinning={syncing} type="button" on:click={onSync} disabled={view !== 'commit' || !repository || syncing || refreshing || transitioning} title={view === 'commit' ? 'Fetch all remotes and prune deleted refs' : 'Sync is available in Commit'}>
     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.2 12.4h-1A2.7 2.7 0 0 1 4 7a4.4 4.4 0 0 1 8.4 1.2A2.2 2.2 0 0 1 12 12.5h-1.2M8 7.1v6.1m0 0-2.1-2.1M8 13.2l2.1-2.1" /></svg>
     <span>{syncing ? 'Syncing…' : 'Sync'}</span>
   </button>
 
-  <button class="toolbar-action" class:spinning={refreshing} type="button" on:click={onRefresh} disabled={!repository || refreshing || syncing || transitioning}>
+  <button class="toolbar-action" class:spinning={refreshing} type="button" on:click={onRefresh} disabled={view === 'search' || !repository || refreshing || syncing || transitioning} title={view === 'search' ? 'Search sessions keep their own results' : 'Refresh repository state'}>
     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 4.5V1.8m0 2.7h-2.7M3 11.5v2.7m0-2.7h2.7M3.8 5.1A5.2 5.2 0 0 1 13 4.5M12.2 10.9A5.2 5.2 0 0 1 3 11.5" /></svg>
     <span>Refresh</span>
   </button>

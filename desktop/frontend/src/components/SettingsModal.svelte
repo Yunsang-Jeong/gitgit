@@ -64,7 +64,7 @@
     const ruleID = `rule-${Date.now()}-${Math.random()}`
     onPresetsChange(presets.map((preset) => preset.id !== presetID ? preset : {
       ...preset,
-      rules: [...preset.rules, { id: ruleID, action: 'highlight', field: 'message', pattern: '' }],
+      rules: [...preset.rules, { id: ruleID, action: 'show', field: 'message', pattern: '' }],
     }))
   }
 
@@ -80,7 +80,7 @@
     onPresetsChange([...presets, {
       id,
       label: 'New Preset',
-      rules: [{ id: `${id}-rule`, action: 'highlight', field: 'message', pattern: '' }],
+      rules: [{ id: `${id}-rule`, action: 'show', field: 'message', pattern: '' }],
     }])
   }
 
@@ -209,7 +209,6 @@
                   {#each preset.rules as rule (rule.id)}
                     <div class="settings-preset-rule">
                       <select value={rule.action} on:change={(event) => updatePresetRule(preset.id, rule.id, 'action', (event.currentTarget as HTMLSelectElement).value as CommitFilterAction)} aria-label="Preset filter action">
-                        <option value="highlight">Highlight</option>
                         <option value="hide">Hide</option>
                         <option value="show">Show</option>
                       </select>

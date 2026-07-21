@@ -108,3 +108,14 @@ func TestValidateExternalURLAllowsOnlyAbsoluteHTTPLinks(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowserDevelopmentModeRequiresExplicitEnvironmentValue(t *testing.T) {
+	if !browserDevelopmentMode("1") {
+		t.Fatal("GITGIT_BROWSER_DEV=1 should keep the native development window hidden")
+	}
+	for _, value := range []string{"", "0", "true", "browser"} {
+		if browserDevelopmentMode(value) {
+			t.Fatalf("browserDevelopmentMode(%q) unexpectedly enabled", value)
+		}
+	}
+}

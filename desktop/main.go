@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"log"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -22,6 +23,7 @@ func main() {
 		MinWidth:                 1120,
 		MinHeight:                720,
 		BackgroundColour:         &options.RGBA{R: 10, G: 17, B: 21, A: 255},
+		StartHidden:              browserDevelopmentMode(os.Getenv("GITGIT_BROWSER_DEV")),
 		DisableResize:            false,
 		EnableDefaultContextMenu: false,
 		AssetServer: &assetserver.Options{
@@ -43,4 +45,8 @@ func main() {
 	}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func browserDevelopmentMode(value string) bool {
+	return value == "1"
 }

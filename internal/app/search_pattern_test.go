@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/yunsang/gitgit/internal/apperr"
@@ -106,19 +107,29 @@ func TestSearchCombinesSourcesWithoutDuplicateResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := NewSearchService(repo).Search(context.Background(), SearchOptions{
+	progress := make([]SearchProgress, 0)
+	response, err := NewSearchService(repo).SearchWithProgress(context.Background(), SearchOptions{
 		Messages: []string{"*" + token + "*"},
 		Diffs:    []string{"*" + token + "*"},
 		Files:    []string{"**/*" + token + "*"},
 		Engine:   "glob",
 		Limit:    100,
 		Context:  3,
+	}, func(update SearchProgress) {
+		progress = append(progress, update)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if response.Count != 1 {
 		t.Fatalf("combined search count = %d, want 1: %#v", response.Count, response.Results)
+	}
+	if response.Scanned != 1 || len(progress) == 0 || progress[len(progress)-1] != (SearchProgress{Scanned: 1, Total: 1}) {
+		t.Fatalf("search progress = %#v, response scanned = %d", progress, response.Scanned)
+	}
+	result := response.Results[0]
+	if result.Message == "" || result.Date == "" || len(result.Files) != 1 {
+		t.Fatalf("search did not reuse log and batch file metadata: %#v", result)
 	}
 	if !slices.Equal(response.Results[0].MatchSources, []string{"msg", "diff", "file"}) {
 		t.Fatalf("sources = %v", response.Results[0].MatchSources)
@@ -250,6 +261,36 @@ func TestSearchPredicateAndPrecedesOr(t *testing.T) {
 	slices.Sort(paths)
 	if !slices.Equal(paths, []string{"docs/beta.md", "src/alpha.txt"}) {
 		t.Fatalf("precedence search paths = %v", paths)
+	}
+}
+
+func TestSearchPredicateParenthesesOverridePrecedence(t *testing.T) {
+	predicates, err := compileSearchPredicates(SearchOptions{
+		Predicates: []SearchPredicate{
+			{Source: "msg", Value: "one", OpenGroups: 1},
+			{Source: "file", Value: "two", Join: "or", CloseGroups: 1},
+			{Source: "diff", Value: "three", Join: "and"},
+		},
+		Engine: "glob", Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evaluateSearchExpression(predicates, []bool{true, false, false}) {
+		t.Fatal("(true OR false) AND false should be false")
+	}
+	if !evaluateSearchExpression(predicates, []bool{false, true, true}) {
+		t.Fatal("(false OR true) AND true should be true")
+	}
+}
+
+func TestSearchPredicateRejectsUnbalancedParentheses(t *testing.T) {
+	_, err := normalizedSearchPredicates(SearchOptions{Predicates: []SearchPredicate{
+		{Source: "msg", Value: "one", OpenGroups: 1},
+		{Source: "file", Value: "two", Join: "and"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "not balanced") {
+		t.Fatalf("expected unbalanced parenthesis error, got %v", err)
 	}
 }
 

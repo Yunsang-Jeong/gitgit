@@ -3,7 +3,6 @@ import test from 'node:test'
 
 import {
   commitMatchesRule,
-  isCommitHighlighted,
   isCommitVisible,
   matchesFilterValue,
   visibleCommits,
@@ -34,9 +33,9 @@ const fieldCases = [
   { field: 'date', hit: '2026-07', miss: '2025-01' },
 ]
 
-test('filter fields and actions cover every 5 x 3 combination', () => {
+test('filter fields and actions cover every 5 x 2 combination', () => {
   for (const { field, hit, miss } of fieldCases) {
-    for (const action of ['highlight', 'hide', 'show']) {
+    for (const action of ['hide', 'show']) {
       assert.equal(
         commitMatchesRule(baseCommit, { id: `${action}-${field}-hit`, action, field, pattern: hit }),
         true,
@@ -96,15 +95,6 @@ test('show/hide AND/OR truth table covers all 64 combinations', () => {
       }
     }
   }
-})
-
-test('highlight is independent from visibility actions', () => {
-  const highlight = { id: 'highlight', action: 'highlight', field: 'author', pattern: 'alice' }
-  const show = { id: 'show', action: 'show', field: 'message', pattern: 'search' }
-  const hide = { id: 'hide', action: 'hide', field: 'file', pattern: 'docs/**' }
-  assert.equal(isCommitHighlighted(baseCommit, [highlight, show, hide]), true)
-  assert.equal(isCommitVisible(baseCommit, [highlight, show, hide]), true)
-  assert.equal(isCommitVisible(baseCommit, [highlight, { ...hide, pattern: 'src/**' }]), false)
 })
 
 test('the same filter rules are applied to commits and search results', () => {

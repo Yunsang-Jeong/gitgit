@@ -24,7 +24,7 @@ test('search results collapse file matches into one row per commit', () => {
   ])
 
   assert.equal(grouped.length, 2)
-  assert.deepEqual(grouped[0].matched_files.map((file) => file.path), ['one.go', 'two.go'])
+  assert.deepEqual(grouped[0].matched_files.map((file) => file.path), ['two.go'])
   assert.deepEqual(grouped[0].match_sources, ['msg', 'file'])
   assert.equal(searchResultCommitCount(grouped), 2)
 })
@@ -37,4 +37,13 @@ test('duplicate file matches are only represented once', () => {
 
   assert.equal(grouped[0].matched_files.length, 1)
   assert.deepEqual(grouped[0].match_sources, ['msg', 'diff'])
+})
+
+test('message-only matches do not label every changed file as a file match', () => {
+  const grouped = groupSearchResultsByCommit([
+    result('aaaaaaaa', 'one.go', ['msg']),
+    result('aaaaaaaa', 'two.go', ['msg']),
+  ])
+
+  assert.deepEqual(grouped[0].matched_files, [])
 })
