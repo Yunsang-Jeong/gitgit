@@ -172,6 +172,7 @@ export interface CommitSummary {
   date: string
   refs?: string[]
   branches?: string[]
+  historical_branch?: string
   files: FileChange[]
 }
 

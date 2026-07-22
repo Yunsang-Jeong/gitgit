@@ -16,7 +16,7 @@
   import { cloneFilterPresets, defaultFilterLogic, defaultFilterPresets, resolvePresetRules } from './lib/presets'
   import { defaultRemoteBadgeRules, normalizeRemoteBadgeIcon } from './lib/remotes'
   import { groupSearchResultsByCommit, searchResultCommitCount } from './lib/search-results'
-  import { removeSearchPatternAt, searchExpressionError, searchPatternText } from './lib/search-expression'
+  import { searchExpressionError, searchPatternText } from './lib/search-expression'
   import type {
     AppSettings,
     ChangedFilesView,
@@ -449,12 +449,22 @@
     if (selectedCommit === commit.commit && historyDetail) return
     const requestID = ++detailRequestID
     const repositoryRoot = repository?.root
+    const requestedAllBranches = historyAllBranches
     selectedCommit = commit.commit
     detailOverride = null
     try {
-      const detail = await api.commitDetail(commit.commit, '')
-      if (requestID !== detailRequestID || repository?.root !== repositoryRoot || selectedCommit !== commit.commit) return
-      historyDetail = detail
+      const [detail, branchResponse] = await Promise.all([
+        api.commitDetail(commit.commit, ''),
+        requestedAllBranches && commit.branches === undefined
+          ? api.historyBranches([commit.commit])
+          : Promise.resolve(null),
+      ])
+      if (requestID !== detailRequestID || repository?.root !== repositoryRoot || selectedCommit !== commit.commit || historyAllBranches !== requestedAllBranches) return
+      historyDetail = {
+        ...detail,
+        historical_branch: commit.historical_branch,
+        branches: branchResponse?.branches[commit.commit] ?? commit.branches,
+      }
     } catch (error) {
       if (requestID !== detailRequestID || repository?.root !== repositoryRoot) return
       setStatus(errorText(error), 'error')
@@ -887,19 +897,9 @@
     setStatus(`${source === 'msg' ? 'Message' : source.toUpperCase()} condition added to a new Search session.`, 'info')
   }
 
-  function removeSearchPattern(index: number): void {
-    patterns = removeSearchPatternAt(patterns, index)
-  }
-
   function changeSearchScope(nextScope: string, nextAllRefs: boolean): void {
     scope = nextAllRefs ? 'All refs' : nextScope
     searchAllRefs = nextAllRefs
-  }
-
-  async function useSearchAuthor(value: string): Promise<void> {
-    createSearchSession([], value)
-    await tick()
-    focusPatternInput()
   }
 
   function escapeGlob(value: string): string {
@@ -1487,7 +1487,6 @@
           onSelect={(commit) => void selectCommit(commit)}
           onLoadMore={() => void loadMoreHistoryForCurrentFilters()}
           onSearchMessage={(message) => void addPatternSearch('msg', message)}
-          onUseSearchAuthor={(value) => void useSearchAuthor(value)}
         />
       </section>
 
@@ -1558,7 +1557,6 @@
         onScopeChange={changeSearchScope}
         onRunSearch={() => void runSearch()}
         onCancelSearch={() => void cancelSearch()}
-        onRemovePattern={removeSearchPattern}
         onSelectResult={selectSearchResult}
         onStartInspectorResize={startPaneResize}
         onResizeInspectorWithKeyboard={resizePaneWithKeyboard}

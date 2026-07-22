@@ -1,13 +1,6 @@
 <script lang="ts">
-  import type { Pattern, PatternSource, SearchPatternJoin } from '../lib/types'
-  import {
-    groupSearchPatternRange,
-    removeSearchPatternAt,
-    searchExpressionError,
-    searchExpressionText,
-    searchPatternDepths,
-    ungroupSearchPatternRange,
-  } from '../lib/search-expression'
+  import type { Pattern } from '../lib/types'
+  import { parseSearchExpression, searchExpressionText } from '../lib/search-expression'
 
   export let patterns: Pattern[] = []
   export let engine = 'glob'
@@ -16,91 +9,36 @@
   export let author = ''
   export let since = ''
   export let until = ''
+  export let stale = false
+  export let applied = false
+  export let queryError = ''
   export let onSearch: () => void
 
-  let draftSource: PatternSource = 'msg'
-  let draftValue = ''
-  let draftJoin: SearchPatternJoin = 'and'
-  let selectedPatternIndexes: number[] = []
+  let expressionDraft = searchExpressionText(patterns)
   let observedPatterns = patterns
+  let updatingFromExpression = false
 
-  $: expressionError = searchExpressionError(patterns)
-  $: expressionText = searchExpressionText(patterns)
-  $: patternDepths = searchPatternDepths(patterns)
   $: if (patterns !== observedPatterns) {
     observedPatterns = patterns
-    selectedPatternIndexes = []
-  }
-  $: selectedRange = [...selectedPatternIndexes].sort((a, b) => a - b)
-  $: selectionIsContiguous = selectedRange.every((index, offset) => offset === 0 || index === selectedRange[offset - 1] + 1)
-  $: canGroupSelection = selectedRange.length >= 2
-    && selectedRange[selectedRange.length - 1] < patterns.length
-    && selectionIsContiguous
-    && (patterns[selectedRange[0]]?.open_groups ?? 0) < 8
-    && (patterns[selectedRange[selectedRange.length - 1]]?.close_groups ?? 0) < 8
-  $: canUngroupSelection = canGroupSelection
-    && (patterns[selectedRange[0]]?.open_groups ?? 0) > 0
-    && (patterns[selectedRange[selectedRange.length - 1]]?.close_groups ?? 0) > 0
-
-  function patternPlaceholder(source: PatternSource): string {
-    return source === 'file' ? '**/*.go' : '*pattern*'
-  }
-
-  function updatePattern(index: number, patch: Partial<Pattern>): void {
-    patterns = patterns.map((pattern, patternIndex) => patternIndex === index
-      ? { ...pattern, ...patch, join: index === 0 ? undefined : (patch.join ?? pattern.join ?? 'or') }
-      : pattern)
-  }
-
-  function removePattern(index: number): void {
-    patterns = removeSearchPatternAt(patterns, index)
-    selectedPatternIndexes = selectedPatternIndexes
-      .filter((selectedIndex) => selectedIndex !== index)
-      .map((selectedIndex) => selectedIndex > index ? selectedIndex - 1 : selectedIndex)
-  }
-
-  function addPattern(): void {
-    const value = draftValue.trim()
-    if (!value) return
-    patterns = [...patterns, {
-      source: draftSource,
-      value,
-      join: patterns.length > 0 ? draftJoin : undefined,
-    }]
-    draftValue = ''
-  }
-
-  function togglePatternSelection(index: number): void {
-    selectedPatternIndexes = selectedPatternIndexes.includes(index)
-      ? selectedPatternIndexes.filter((selectedIndex) => selectedIndex !== index)
-      : [...selectedPatternIndexes, index]
-  }
-
-  function groupSelection(): void {
-    if (!canGroupSelection) return
-    patterns = groupSearchPatternRange(patterns, selectedRange[0], selectedRange[selectedRange.length - 1])
-    selectedPatternIndexes = []
-  }
-
-  function ungroupSelection(): void {
-    if (!canUngroupSelection) return
-    patterns = ungroupSearchPatternRange(patterns, selectedRange[0], selectedRange[selectedRange.length - 1])
-    selectedPatternIndexes = []
-  }
-
-  function handlePatternKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      if (draftValue.trim()) addPattern()
-      else if (patterns.length > 0) onSearch()
+    if (!updatingFromExpression) {
+      expressionDraft = searchExpressionText(patterns)
+      queryError = ''
     }
+    updatingFromExpression = false
+  }
+  function updateExpression(event: Event): void {
+    expressionDraft = (event.currentTarget as HTMLInputElement).value
+    const parsed = parseSearchExpression(expressionDraft)
+    queryError = parsed.error
+    if (parsed.error) return
+    updatingFromExpression = true
+    patterns = parsed.patterns
   }
 
-  function handleExistingPatternKeydown(index: number, event: KeyboardEvent): void {
+  function handleExpressionKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Enter') return
     event.preventDefault()
-    if (!patterns[index]?.value.trim()) return
-    onSearch()
+    if (!queryError && patterns.length > 0) onSearch()
   }
 
   function changeScope(event: Event): void {
@@ -110,93 +48,38 @@
 </script>
 
 <section class="search-composer" aria-label="Search composer">
-  <div class="search-condition-list" aria-label="Search conditions">
-    {#each patterns as pattern, index}
-      <div class:grouped={patternDepths[index] > 0} class="search-condition-row">
-        {#if index === 0}
-          <span class="search-condition-where">Where</span>
-        {:else}
-          <select
-            class="search-condition-join"
-            value={pattern.join ?? 'or'}
-            on:change={(event) => updatePattern(index, { join: (event.currentTarget as HTMLSelectElement).value as SearchPatternJoin })}
-            aria-label="Condition {index + 1} operator"
-            title="Condition operator"
-          >
-            <option value="and">AND</option>
-            <option value="or">OR</option>
-          </select>
-        {/if}
-        <label class="search-condition-select" title="Select adjacent conditions to group">
-          <input type="checkbox" checked={selectedPatternIndexes.includes(index)} on:change={() => togglePatternSelection(index)} aria-label="Select condition {index + 1} for grouping" />
-        </label>
-        <span class="search-group-rails" aria-label={patternDepths[index] > 0 ? `Group depth ${patternDepths[index]}` : 'Not grouped'}>
-          {#each Array(patternDepths[index]) as _, depth}<i style={`left: ${depth * 4}px`}></i>{/each}
-        </span>
-        <select
-          class="search-condition-source"
-          value={pattern.source}
-          on:change={(event) => updatePattern(index, { source: (event.currentTarget as HTMLSelectElement).value as PatternSource })}
-          aria-label="Condition {index + 1} source"
-          title="Pattern source"
-        >
-          <option value="msg">Message</option>
-          <option value="diff">DIFF</option>
-          <option value="file">FILE</option>
-        </select>
-        <input
-          class="search-condition-value"
-          value={pattern.value}
-          on:input={(event) => updatePattern(index, { value: (event.currentTarget as HTMLInputElement).value })}
-          on:keydown={(event) => handleExistingPatternKeydown(index, event)}
-          placeholder={patternPlaceholder(pattern.source)}
-          aria-label="Condition {index + 1} pattern"
-        />
-        <button
-          class="remove-search-condition"
-          type="button"
-          on:click={() => removePattern(index)}
-          aria-label="Remove condition {index + 1}"
-          title="Remove condition"
-        >×</button>
-      </div>
-    {/each}
-
-    <div class="search-condition-row search-condition-add-row">
-      {#if patterns.length === 0}
-        <span class="search-condition-where">Where</span>
-      {:else}
-        <select bind:value={draftJoin} class="search-condition-join" aria-label="New condition operator" title="Condition operator">
-          <option value="and">AND</option>
-          <option value="or">OR</option>
-        </select>
-      {/if}
-      <span class="search-condition-select-spacer"></span>
-      <span class="search-group-rails"></span>
-      <select bind:value={draftSource} class="search-condition-source" aria-label="New condition source" title="Pattern source">
-        <option value="msg">Message</option>
-        <option value="diff">DIFF</option>
-        <option value="file">FILE</option>
-      </select>
+  <div class="search-expression-composer">
+    <label class:error={Boolean(queryError)} class="search-expression-field">
+      <span>Expression</span>
       <input
         data-pattern-input
-        bind:value={draftValue}
-        class="search-condition-value"
-        on:keydown={handlePatternKeydown}
-        placeholder={patternPlaceholder(draftSource)}
-        aria-label="New condition pattern"
+        value={expressionDraft}
+        on:input={updateExpression}
+        on:keydown={handleExpressionKeydown}
+        placeholder="MSG: *cache* AND FILE: **/*.go"
+        aria-label="Search expression"
+        aria-describedby="search-expression-helper"
+        aria-invalid={Boolean(queryError)}
+        spellcheck="false"
+        autocomplete="off"
       />
-      <button class="add-pattern" type="button" on:click={addPattern} disabled={!draftValue.trim()}>＋ Condition</button>
-    </div>
-    <div class:error={Boolean(expressionError)} class="search-expression-preview">
-      <span>Expression</span>
-      <code>{expressionText || 'Add a condition to build the query'}</code>
-      <div class="search-group-actions">
-        <button type="button" on:click={groupSelection} disabled={!canGroupSelection} title="Select two or more adjacent conditions">Group selected</button>
-        <button type="button" on:click={ungroupSelection} disabled={!canUngroupSelection} title="Select an existing group from its first through last condition">Ungroup</button>
-      </div>
-    </div>
-    <p class:error={Boolean(expressionError)} class="search-condition-hint">{expressionError || 'Select adjacent conditions to group them. Without a group, AND is evaluated before OR. Scope, Author, and dates apply to the whole query.'}</p>
+    </label>
+    <p id="search-expression-helper" class:error={Boolean(queryError)} class:stale={stale && !queryError} class="search-expression-helper" aria-live="polite">
+      <span aria-hidden="true">{queryError ? '!' : stale ? '↻' : '?'}</span>
+      {#if queryError}
+        {queryError}
+      {:else if !expressionDraft.trim()}
+        Start with MSG:, DIFF:, or FILE:. Combine conditions with AND / OR and use ( ) for priority.
+      {:else if stale}
+        Expression changed · Press Enter or Search to update the current results.
+      {:else if applied}
+        {patterns.length} {patterns.length === 1 ? 'condition' : 'conditions'} · Current results use this expression.
+      {:else if engine === 'regex'}
+        {patterns.length} {patterns.length === 1 ? 'condition' : 'conditions'} · Values use Go regular-expression syntax. Press Enter to search.
+      {:else}
+        {patterns.length} {patterns.length === 1 ? 'condition' : 'conditions'} · Use * for text and ** across directories. Press Enter to search.
+      {/if}
+    </p>
   </div>
 
   <div class="filter-row">

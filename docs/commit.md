@@ -41,7 +41,7 @@ Dropdown에는 검색 input이 있으며 처음부터 모든 branch를 렌더링
 
 ## History loading
 
-`All branches`에서는 선택 가능한 ref의 commit을 date order로 읽는다. Remote ref badge는 Settings의 URL mapping과 embedded provider icon을 사용한다.
+`All branches`에서는 선택 가능한 ref의 commit을 topology order로 읽어 parent가 child보다 먼저 나타나지 않게 한다. Remote ref badge는 Settings의 URL mapping과 embedded provider icon을 사용한다.
 
 Default branch가 아닌 local branch를 선택하면 초기 table은 다음 범위만 보여준다.
 
@@ -61,15 +61,18 @@ Preset이 활성화되면 이미 load된 commit만 검사하고 멈추지 않는
 
 ## Commit table과 Inspector
 
-Commit table은 short SHA, subject, author, date를 표시하고 branch/ref badge는 subject 아래의 작은 보조 행에 둔다. Commit column에는 branch 정보를 섞지 않는다. Load된 일부 history나 Preset 결과만으로는 topology를 정확하게 표현할 수 없으므로 graph column은 제공하지 않는다. 행을 선택하면 Inspector가 다음 정보를 제공한다.
+Commit table은 별도 header와 cell border 없이 branch/ref badge, graph, subject 순서의 32px compact row로 표시한다. Commit hash, author와 date는 table에서 제거하고 Inspector에서 확인한다. Branch/ref badge는 graph 왼쪽의 고정 column에 두고 모든 primary badge를 같은 폭으로 표시하며 긴 이름은 ellipsis로 줄인다. 표시할 ref가 여러 개면 default branch를 우선한 첫 badge와 별도 고정 폭의 `+N` badge만 노출한다. Remote badge를 숨기는 설정이 적용된 ref는 `N`에 포함하지 않는다. Graph는 load된 commit의 parent 관계를 표현하고 default branch lane을 가장 왼쪽에 유지한다. 종료된 lane의 오른쪽 lane은 빈 공간을 남기지 않고 왼쪽으로 collapse한다. 동시에 표시하는 실제 lane은 최대 6개이며, 그 밖의 topology는 별도의 `~` lane으로 축약한다.
+
+Graph는 row마다 SVG를 만들지 않고 visible history 전체 높이를 소유하는 하나의 fixed-width SVG overlay로 그린다. Scroll은 이 overlay를 table content와 함께 이동시킬 뿐 draw를 다시 실행하지 않는다. History page나 Preset 결과가 바뀌면 visible commit topology를 먼저 완성한 뒤 overlay 하나를 교체해 기존 row와 새 row가 서로 다른 lane 좌표를 잠시 사용하는 상태를 만들지 않는다. Preset으로 중간 commit이 숨겨지면 hidden chain을 가장 가까운 visible ancestor로 collapse한 뒤 graph를 계산한다. 행을 선택하면 Inspector가 다음 정보를 제공한다.
 
 - Full commit hash, message, author, date와 refs
+- 직접 가리키는 ref가 없는 merge second-parent commit은 merge source를 `Branch`로 표시하고, 이를 복원할 근거가 없을 때만 local branch containment를 `Branches`로 표시
 - Changed files list 또는 directory-first tree
 - 선택한 file의 unified diff
 - File path copy, Finder, terminal, IDE action
 - Commit message, author, file path를 새 Search session으로 보내는 context action
 
-Text hover는 interaction 종류를 구분한다. Cyan outline은 click 시 바로 copy되는 값이고, amber outline은 우클릭 context menu에서 copy, Search 추가, Finder/terminal 같은 action을 선택할 수 있는 값이다.
+Text hover는 interaction 종류를 구분한다. Cyan outline은 click 시 바로 copy되는 값이고, amber outline은 우클릭 context menu에서 copy, Search 추가, Finder/terminal 같은 action을 선택할 수 있는 값이다. Author는 별도 interaction layer 없이 선택 가능한 일반 text로 표시한다. Review link는 ref badge와 같은 compact control 높이를 사용한다.
 
 Remote badge는 GitHub, GitLab, Bitbucket, Azure DevOps, Codeberg, Gitea, Git, Cloud, self-hosted server와 generic remote icon을 application에 embedded SVG로 포함한다. Remote URL substring별 icon은 Settings에서 변경할 수 있다.
 

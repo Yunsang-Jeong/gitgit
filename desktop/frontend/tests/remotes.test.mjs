@@ -5,9 +5,11 @@ import {
   defaultRemoteBadgeRules,
   defaultFirstRefs,
   isEmbeddedRemoteBadgeIcon,
+  inspectorRefContext,
   normalizeRemoteBadgeIcon,
   remoteBadgeIconOptions,
   resolveRefBadge,
+  summarizeRefBadges,
   visibleRefBadges,
 } from '../src/lib/remotes.ts'
 
@@ -66,4 +68,39 @@ test('default branch is first without changing the source ref order', () => {
     visibleRefBadges(refs, remotes, defaultRemoteBadgeRules(), true, 'main').map((badge) => badge.label),
     ['main', 'feature/topic', 'v1.0.0'],
   )
+})
+
+test('commit rows keep one default-first ref and summarize the rest', () => {
+  const refs = ['feature/topic', 'origin/main', 'main', 'v1.0.0']
+  const localSummary = summarizeRefBadges(refs, remotes, defaultRemoteBadgeRules(), false, 'main')
+  assert.equal(localSummary.primary?.branch, 'main')
+  assert.deepEqual(localSummary.remaining.map((badge) => badge.branch), ['feature/topic', 'v1.0.0'])
+
+  const allSummary = summarizeRefBadges(refs, remotes, defaultRemoteBadgeRules(), true, 'main')
+  assert.equal(allSummary.primary?.branch, 'main')
+  assert.deepEqual(allSummary.remaining.map((badge) => badge.ref), ['feature/topic', 'origin/main', 'v1.0.0'])
+  assert.deepEqual(refs, ['feature/topic', 'origin/main', 'main', 'v1.0.0'])
+})
+
+test('inspector falls back to containing branches when a past commit has no exact ref', () => {
+  assert.deepEqual(inspectorRefContext([], ['feature/topic', 'main'], 'main'), {
+    label: 'Branches',
+    values: ['main', 'feature/topic'],
+  })
+  assert.deepEqual(inspectorRefContext(['v1.0.0'], ['main'], 'main'), {
+    label: 'Refs',
+    values: ['v1.0.0'],
+  })
+  assert.deepEqual(inspectorRefContext([], ['main'], 'main', 'aws_s3_buckets'), {
+    label: 'Branch',
+    values: ['aws_s3_buckets'],
+  })
+  assert.deepEqual(inspectorRefContext(['release/1.0'], ['main'], 'main', 'feature/topic'), {
+    label: 'Refs',
+    values: ['release/1.0'],
+  })
+  assert.deepEqual(inspectorRefContext(undefined, undefined, 'main'), {
+    label: 'Refs',
+    values: [],
+  })
 })

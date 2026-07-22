@@ -29,13 +29,6 @@
 </script>
 
 <div class="results-table" role="table" aria-label="Search results">
-  <div class="results-header result-grid" role="row">
-    <span>Commit</span>
-    <span>Message</span>
-    <span>Author</span>
-    <span>Date</span>
-    <span>Match</span>
-  </div>
   <div class="results-body">
     {#if error && results.length > 0}
       <div class="criteria-summary-bar filter-rules" role="alert">

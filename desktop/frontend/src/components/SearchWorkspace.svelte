@@ -3,7 +3,6 @@
   import ProjectSwitcher from './ProjectSwitcher.svelte'
   import ResultsTable from './ResultsTable.svelte'
   import SearchComposer from './SearchComposer.svelte'
-  import SearchCriteriaBar from './SearchCriteriaBar.svelte'
   import WorktreePicker from './WorktreePicker.svelte'
   import { formatDate } from '../lib/datetime'
   import { searchExpressionError } from '../lib/search-expression'
@@ -52,13 +51,15 @@
   export let onScopeChange: (scope: string, allRefs: boolean) => void
   export let onRunSearch: () => void
   export let onCancelSearch: () => void
-  export let onRemovePattern: (index: number) => void
   export let onSelectResult: (index: number) => void
   export let onStartInspectorResize: (event: MouseEvent) => void
   export let onResizeInspectorWithKeyboard: (event: KeyboardEvent) => void
 
   $: activeWorktree = repository?.worktrees.find((worktree) => worktree.path === repository?.root)
-  $: expressionError = searchExpressionError(patterns)
+  let composerError = ''
+  let sessionSidebarCollapsed = false
+  let queryCollapsed = false
+  $: expressionError = composerError || searchExpressionError(patterns)
 
   function selectSessionWithKeyboard(event: KeyboardEvent, id: string): void {
     if (event.key !== 'Enter' && event.key !== ' ') return
@@ -72,11 +73,21 @@
   }
 </script>
 
-<section class="search-workspace pane">
-  <aside class="search-session-sidebar">
+<section class:sessions-collapsed={sessionSidebarCollapsed} class="search-workspace pane">
+  <aside class:collapsed={sessionSidebarCollapsed} class="search-session-sidebar">
     <header>
-      <div><strong>Search sessions</strong><span>{sessions.length}</span></div>
-      <button type="button" on:click={onNewSession} aria-label="New search session" title="New search session">＋</button>
+      <div class="search-session-heading"><strong>Search sessions</strong><span>{sessions.length}</span></div>
+      <div class="search-session-sidebar-actions">
+        <button
+          class="search-session-collapse"
+          type="button"
+          on:click={() => (sessionSidebarCollapsed = !sessionSidebarCollapsed)}
+          aria-label={sessionSidebarCollapsed ? 'Expand search sessions' : 'Collapse search sessions'}
+          aria-expanded={!sessionSidebarCollapsed}
+          title={sessionSidebarCollapsed ? 'Expand search sessions' : 'Collapse search sessions'}
+        >{sessionSidebarCollapsed ? '›' : '‹'}</button>
+        <button type="button" on:click={onNewSession} aria-label="New search session" title="New search session">＋</button>
+      </div>
     </header>
     <div class="search-session-list" role="listbox" aria-label="Search sessions">
       {#each sessions as session}
@@ -158,13 +169,20 @@
       <button class="history-action history-run-search" type="button" on:click={onRunSearch} disabled={disabled || !repository || searching || patterns.length === 0 || Boolean(expressionError)}>
         {searching ? 'Searching…' : 'Search'}
       </button>
+      <button
+        class="search-layout-toggle"
+        type="button"
+        on:click={() => (queryCollapsed = !queryCollapsed)}
+        aria-label={queryCollapsed ? 'Show query composer' : 'Hide query composer'}
+        aria-controls="search-query-panel"
+        aria-expanded={!queryCollapsed}
+        title={queryCollapsed ? 'Show query composer' : 'Hide query composer'}
+      >{queryCollapsed ? '↓' : '↑'}</button>
     </header>
 
-    <div class="search-session-query">
-      <SearchComposer bind:patterns bind:engine bind:scope bind:allRefs bind:author bind:since bind:until onSearch={onRunSearch} />
+    <div id="search-query-panel" class="search-session-query" hidden={queryCollapsed}>
+      <SearchComposer bind:patterns bind:engine bind:scope bind:allRefs bind:author bind:since bind:until bind:queryError={composerError} {stale} {applied} onSearch={onRunSearch} />
     </div>
-
-    <SearchCriteriaBar {patterns} {stale} {applied} onRemove={onRemovePattern} />
 
     <div class="search-results-layout" style:--search-inspector-width={`${inspectorWidth}px`}>
       <ResultsTable

@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   groupSearchPatternRange,
+  parseSearchExpression,
   removeSearchPatternAt,
   searchExpressionError,
   searchExpressionText,
@@ -10,6 +11,35 @@ import {
   searchPatternText,
   ungroupSearchPatternRange,
 } from '../src/lib/search-expression.ts'
+
+test('expression input parses sources, operators, and nested groups', () => {
+  assert.deepEqual(parseSearchExpression('MSG: *cache* OR (FILE: **/*.go AND DIFF: *context*)'), {
+    patterns: [
+      { source: 'msg', value: '*cache*' },
+      { source: 'file', value: '**/*.go', join: 'or', open_groups: 1 },
+      { source: 'diff', value: '*context*', join: 'and', close_groups: 1 },
+    ],
+    error: '',
+  })
+})
+
+test('expression input gives actionable helper errors while typing', () => {
+  assert.match(parseSearchExpression('MSG').error, /Add : after MSG/)
+  assert.match(parseSearchExpression('MSG:').error, /Enter a pattern after MSG/)
+  assert.match(parseSearchExpression('MSG: *cache* AND').error, /after AND/)
+  assert.match(parseSearchExpression('MSG: *cache* AND TAG: team').error, /TAG: is not a source/)
+  assert.match(parseSearchExpression('(MSG: *cache*').error, /parenthesis is missing/)
+})
+
+test('expression input keeps spaces, quoted operators, and regex parentheses in values', () => {
+  assert.deepEqual(parseSearchExpression('MESSAGE: "fix AND ship" OR DIFF: ^(fix|feat)'), {
+    patterns: [
+      { source: 'msg', value: 'fix AND ship' },
+      { source: 'diff', value: '^(fix|feat)', join: 'or' },
+    ],
+    error: '',
+  })
+})
 
 test('search expression validates balanced and nested parentheses', () => {
   assert.equal(searchExpressionError([

@@ -9,6 +9,16 @@ export interface RefBadge {
   title: string
 }
 
+export interface RefBadgeSummary {
+  primary: RefBadge | null
+  remaining: RefBadge[]
+}
+
+export interface InspectorRefContext {
+  label: 'Refs' | 'Branch' | 'Branches'
+  values: string[]
+}
+
 export const remoteBadgeIconOptions = [
   { id: 'github', label: 'GitHub' },
   { id: 'gitlab', label: 'GitLab' },
@@ -54,6 +64,15 @@ export function defaultFirstRefs(refs: string[] | undefined, defaultBranch: stri
   return ordered
 }
 
+export function inspectorRefContext(refs: string[] | undefined, branches: string[] | undefined, defaultBranch: string, historicalBranch = ''): InspectorRefContext {
+  const exactRefs = defaultFirstRefs(refs, defaultBranch)
+  if (exactRefs.length > 0) return { label: 'Refs', values: exactRefs }
+  if (historicalBranch) return { label: 'Branch', values: [historicalBranch] }
+  const containingBranches = defaultFirstRefs(branches, defaultBranch)
+  if (containingBranches.length > 0) return { label: 'Branches', values: containingBranches }
+  return { label: 'Refs', values: [] }
+}
+
 export function resolveRefBadge(ref: string, remotes: RemoteInfo[], rules: RemoteBadgeRule[]): RefBadge {
   const remote = remotes.find((candidate) => ref.startsWith(`${candidate.name}/`))
   if (!remote) return { ref, label: ref, branch: ref, icon: '', remote: false, title: ref }
@@ -76,4 +95,12 @@ export function visibleRefBadges(refs: string[] | undefined, remotes: RemoteInfo
   return defaultFirstRefs(refs, defaultBranch)
     .map((ref) => resolveRefBadge(ref, remotes, rules))
     .filter((badge) => showRemotes || !badge.remote)
+}
+
+export function summarizeRefBadges(refs: string[] | undefined, remotes: RemoteInfo[], rules: RemoteBadgeRule[], showRemotes: boolean, defaultBranch = ''): RefBadgeSummary {
+  const badges = visibleRefBadges(refs, remotes, rules, showRemotes, defaultBranch)
+  return {
+    primary: badges[0] ?? null,
+    remaining: badges.slice(1),
+  }
 }

@@ -2,9 +2,10 @@
   import { onDestroy } from 'svelte'
   import ContextMenu from './ContextMenu.svelte'
   import RemoteBadgeIcon from './RemoteBadgeIcon.svelte'
-  import { formatDate } from '../lib/datetime'
+  import { buildCommitGraph, projectVisibleCommits } from '../lib/commit-graph'
+  import { buildCommitGraphDrawing, commitGraphRowHeight, commitGraphWidth } from '../lib/commit-graph-render'
   import { isCommitVisible } from '../lib/history'
-  import { visibleRefBadges } from '../lib/remotes'
+  import { summarizeRefBadges } from '../lib/remotes'
   import type { CommitFilterLogic, CommitFilterRule, CommitSummary, ContextMenuItem, HistoryFilterProgress, RemoteBadgeRule, RemoteInfo } from '../lib/types'
 
   export let commits: CommitSummary[] = []
@@ -24,19 +25,24 @@
   export let onSelect: (commit: CommitSummary) => void
   export let onLoadMore: () => void
   export let onSearchMessage: (message: string) => void
-  export let onUseSearchAuthor: (author: string) => void
 
   let contextMenu: {
     x: number
     y: number
     label: string
     items: ContextMenuItem[]
-    target: { commit: string; field: 'commit' | 'message' | 'author' | 'date' }
+    target: { commit: string; field: 'message' }
   } | null = null
   let copyToast = ''
   let copyToastTimer: ReturnType<typeof setTimeout> | undefined
 
   $: displayedCommits = commits.filter((commit) => isCommitVisible(commit, rules, logic))
+  $: fullGraphLayout = buildCommitGraph(commits, defaultBranch)
+  $: visibleGraphCommits = projectVisibleCommits(commits, new Set(displayedCommits.map((commit) => commit.commit)))
+  $: visiblePrimaryBranch = visibleGraphCommits.some((commit) => commit.refs?.includes(defaultBranch)) ? defaultBranch : ''
+  $: graphLayout = buildCommitGraph(visibleGraphCommits, visiblePrimaryBranch)
+  $: graphDrawing = buildCommitGraphDrawing(visibleGraphCommits, graphLayout.rows, Boolean(visiblePrimaryBranch))
+  $: graphVersion = `${visiblePrimaryBranch}|${visibleGraphCommits.map((commit) => `${commit.commit}:${(commit.parents ?? []).join(',')}`).join(';')}`
 
   function title(message: string): string {
     return message.split('\n')[0]
@@ -68,34 +74,6 @@
     copyToastTimer = setTimeout(() => (copyToast = ''), 1600)
   }
 
-  function openAuthorMenu(event: MouseEvent, commit: CommitSummary): void {
-    const author = commit.author.name || commit.author.email
-    onSelect(commit)
-    contextMenu = {
-      x: event.clientX,
-      y: event.clientY,
-      label: `Actions for ${author}`,
-      target: { commit: commit.commit, field: 'author' },
-      items: [
-        { label: 'Copy author', run: () => copyCell(`${commit.author.name} <${commit.author.email}>`, 'Author', commit) },
-        { label: 'Use as Search author', separatorBefore: true, run: () => onUseSearchAuthor(author) },
-      ],
-    }
-  }
-
-  function openCommitMenu(event: MouseEvent, commit: CommitSummary): void {
-    onSelect(commit)
-    contextMenu = {
-      x: event.clientX,
-      y: event.clientY,
-      label: 'Commit actions',
-      target: { commit: commit.commit, field: 'commit' },
-      items: [
-        { label: 'Copy commit hash', run: () => copyCell(commit.commit, 'Commit hash', commit) },
-      ],
-    }
-  }
-
   function openMessageMenu(event: MouseEvent, commit: CommitSummary): void {
     const message = title(commit.message)
     onSelect(commit)
@@ -111,33 +89,13 @@
     }
   }
 
-  function openDateMenu(event: MouseEvent, commit: CommitSummary): void {
-    const date = formatDate(commit.date)
-    onSelect(commit)
-    contextMenu = {
-      x: event.clientX,
-      y: event.clientY,
-      label: 'Commit date actions',
-      target: { commit: commit.commit, field: 'date' },
-      items: [
-        { label: 'Copy date', run: () => copyCell(date, 'Date', commit) },
-      ],
-    }
-  }
-
   onDestroy(() => {
     if (copyToastTimer) clearTimeout(copyToastTimer)
   })
 </script>
 
-<div class="commit-table" role="table" aria-label="Commit history">
+<div class="commit-table" role="table" aria-label="Commit history" style={`--graph-width: ${commitGraphWidth}px; --commit-row-height: ${commitGraphRowHeight}px`}>
   <div class="commit-table-scroll" on:scroll={handleScroll}>
-    <div class="commit-header commit-grid" role="row">
-      <span>Commit</span>
-      <span>Message</span>
-      <span>Author</span>
-      <span>Date</span>
-    </div>
     <div class="commit-body">
       {#if loading}
         <div class="history-empty"><span class="empty-spinner"></span><strong>Loading commit history…</strong></div>
@@ -153,37 +111,55 @@
           {:else}<span class="empty-symbol">∅</span><strong>No commits match active presets</strong>{/if}
         </div>
       {:else}
-        {#each displayedCommits as commit}
+        {#key graphVersion}
+          <svg class="commit-graph-overlay" viewBox={`0 0 ${commitGraphWidth} ${graphDrawing.height}`} width={commitGraphWidth} height={graphDrawing.height} aria-hidden="true">
+            {#each graphDrawing.paths as path (path.color)}
+              <path d={path.d} stroke={path.color} />
+            {/each}
+            {#each graphDrawing.markers as marker, index (`${marker.x}:${marker.y}:${index}`)}
+              <text class="graph-overflow" x={marker.x} y={marker.y} text-anchor="middle">~</text>
+            {/each}
+            {#each graphDrawing.nodes as node (node.commit)}
+              {#if node.primary}
+                <circle class:selected={node.commit === selectedCommit} class="graph-node-ring" cx={node.x} cy={node.y} r="6" />
+              {/if}
+              <circle class="graph-node" cx={node.x} cy={node.y} r={node.radius} fill={node.color} />
+            {/each}
+          </svg>
+        {/key}
+        {#each displayedCommits as commit (commit.commit)}
+            {@const historicalBranch = fullGraphLayout.historicalBranches.get(commit.commit) ?? ''}
+            {@const presentedCommit = historicalBranch ? { ...commit, historical_branch: historicalBranch } : commit}
+            {@const refSummary = summarizeRefBadges(commit.refs, remotes, remoteBadgeRules, showRemoteBadges, defaultBranch)}
+            {@const primaryRef = refSummary.primary}
             <div
               class:selected={selectedCommit === commit.commit}
               class="commit-row commit-grid"
               role="row"
               tabindex="0"
               aria-selected={selectedCommit === commit.commit}
-              on:click={() => onSelect(commit)}
-              on:keydown={(event) => selectWithKeyboard(event, commit)}
+              on:click={() => onSelect(presentedCommit)}
+              on:keydown={(event) => selectWithKeyboard(event, presentedCommit)}
             >
-              <button class:interaction-active={contextMenu?.target.commit === commit.commit && contextMenu.target.field === 'commit'} class="history-data-cell history-commit-cell context-action" type="button" role="cell" title="Select commit · Right-click for copy" on:click|stopPropagation={() => onSelect(commit)} on:contextmenu|preventDefault|stopPropagation={(event) => openCommitMenu(event, commit)}><code class="copy-target">{commit.short_commit}</code></button>
-              <button class:interaction-active={contextMenu?.target.commit === commit.commit && contextMenu.target.field === 'message'} class="history-data-cell history-message-cell context-action" type="button" role="cell" title={`${commit.message}\n\nSelect commit · Right-click for actions`} on:click|stopPropagation={() => onSelect(commit)} on:contextmenu|preventDefault|stopPropagation={(event) => openMessageMenu(event, commit)}>
+              <span class="history-ref-cell" role="cell">
+                {#if primaryRef}
+                  <small class:remote={primaryRef.remote} class="history-primary-ref" title={primaryRef.title} aria-label={primaryRef.label}>
+                    {#if primaryRef.remote}<RemoteBadgeIcon name={primaryRef.icon} />{/if}
+                    <span>{primaryRef.branch}</span>
+                  </small>
+                  {#if refSummary.remaining.length}
+                    <small class="history-ref-count" title={`Additional refs: ${refSummary.remaining.map((badge) => badge.title).join(', ')}`} aria-label={`${refSummary.remaining.length} additional refs`}>+{refSummary.remaining.length}</small>
+                  {/if}
+                {/if}
+              </span>
+              <span class="graph-cell" role="cell" aria-label={`${(commit.parents ?? []).length} parents`}>
+              </span>
+              <button class:interaction-active={contextMenu?.target.commit === commit.commit && contextMenu.target.field === 'message'} class="history-data-cell history-message-cell context-action" type="button" role="cell" title={`${commit.message}\n\nSelect commit · Right-click for actions`} on:click|stopPropagation={() => onSelect(presentedCommit)} on:contextmenu|preventDefault|stopPropagation={(event) => openMessageMenu(event, presentedCommit)}>
                 <strong class="copy-target">{title(commit.message)}</strong>
-                <span class="history-message-meta">
-                  {#if commit.refs?.length}
-                    <span class="history-ref-badges">
-                      {#each visibleRefBadges(commit.refs, remotes, remoteBadgeRules, showRemoteBadges, defaultBranch) as badge (badge.ref)}
-                        <small class:remote={badge.remote} title={badge.title} aria-label={badge.label}>
-                          {#if badge.remote}<RemoteBadgeIcon name={badge.icon} />{/if}
-                          <span>{badge.branch}</span>
-                        </small>
-                      {/each}
-                    </span>
-                  {/if}
-                  {#if commit.commit === branchPoint}
-                    <small class="branch-point" title="Common ancestor with the default branch">Branch point</small>
-                  {/if}
-                </span>
+                {#if commit.commit === branchPoint}
+                  <small class="branch-point" title="Common ancestor with the default branch">Branch point</small>
+                {/if}
               </button>
-              <button class:interaction-active={contextMenu?.target.commit === commit.commit && contextMenu.target.field === 'author'} class="history-data-cell context-action" type="button" role="cell" title={`${commit.author.name} <${commit.author.email}>\n\nSelect commit · Right-click for actions`} on:click|stopPropagation={() => onSelect(commit)} on:contextmenu|preventDefault|stopPropagation={(event) => openAuthorMenu(event, commit)}><span class="copy-target">{commit.author.name}</span></button>
-              <button class:interaction-active={contextMenu?.target.commit === commit.commit && contextMenu.target.field === 'date'} class="history-data-cell context-action" type="button" role="cell" title="Select commit · Right-click for copy" on:click|stopPropagation={() => onSelect(commit)} on:contextmenu|preventDefault|stopPropagation={(event) => openDateMenu(event, commit)}><span class="copy-target">{formatDate(commit.date)}</span></button>
             </div>
         {/each}
         {#if filterProgress}

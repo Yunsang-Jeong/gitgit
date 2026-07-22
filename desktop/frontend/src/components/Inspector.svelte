@@ -5,7 +5,7 @@
   import { addedAndDeletedLines, buildChangedFileTree, type ChangedFileTreeNode } from '../lib/changed-files'
   import { formatDate } from '../lib/datetime'
   import { buildReviewLink } from '../lib/review-links'
-  import { defaultFirstRefs } from '../lib/remotes'
+  import { inspectorRefContext } from '../lib/remotes'
   import type { ChangedFilesView, CommitDetail, ContextMenuItem, FileChange, RemoteInfo, RepositoryTreeResponse, SearchResult } from '../lib/types'
 
   export let selected: CommitDetail | SearchResult | null
@@ -43,7 +43,7 @@
 
   $: changedFileTree = buildChangedFileTree(selected?.files ?? [])
   $: selectedParents = selected && 'parents' in selected ? selected.parents : []
-  $: selectedRefs = defaultFirstRefs(selected?.refs, defaultBranch)
+  $: selectedRefContext = inspectorRefContext(selected?.refs, containingBranches(selected), defaultBranch, historicalBranch(selected))
   $: matchedSearchFiles = selected && 'matched_files' in selected ? selected.matched_files ?? [] : []
   $: isMergeCommit = selectedParents.length > 1
   $: reviewLink = selected ? buildReviewLink(selected.message, selectedParents, remotes, upstream) : null
@@ -68,6 +68,14 @@
 
   function title(message: string): string {
     return message.split('\n')[0]
+  }
+
+  function containingBranches(value: CommitDetail | SearchResult | null): string[] | undefined {
+    return value && 'branches' in value ? value.branches : undefined
+  }
+
+  function historicalBranch(value: CommitDetail | SearchResult | null): string {
+    return value && 'historical_branch' in value ? value.historical_branch ?? '' : ''
   }
 
   function fileLabel(file: FileChange): string {
@@ -228,13 +236,13 @@
       <button class="copy-layer sha-line" type="button" title="Copy commit hash" on:click={() => void copyLayer(selected.commit, 'Commit hash')}><code class="copy-target">{selected.commit}</code></button>
       <dl>
         <dt>Author</dt>
-        <dd><button class="copy-layer metadata-copy" type="button" title="Copy author" on:click={() => void copyLayer(`${selected.author.name} <${selected.author.email}>`, 'Author')}><span class="copy-target">{selected.author.name} <small>&lt;{selected.author.email}&gt;</small></span></button></dd>
+        <dd class="inspector-author"><span>{selected.author.name}</span>{#if selected.author.email}<small>&lt;{selected.author.email}&gt;</small>{/if}</dd>
         <dt>Date</dt>
         <dd><button class="copy-layer metadata-copy" type="button" title="Copy date" on:click={() => void copyLayer(formatDate(selected.date, true), 'Date')}><span class="copy-target">{formatDate(selected.date, true)}</span></button></dd>
-        <dt>Refs</dt>
+        <dt>{selectedRefContext.label}</dt>
         <dd class="ref-list">
-          {#if selectedRefs.length}
-            {#each selectedRefs as ref}<button class="copy-layer" type="button" title="Copy ref" on:click={() => void copyLayer(ref, 'Ref')}><span class="copy-target">{ref}</span></button>{/each}
+          {#if selectedRefContext.values.length}
+            {#each selectedRefContext.values as ref}<button class="copy-layer" type="button" title={`Copy ${selectedRefContext.label === 'Refs' ? 'ref' : 'branch'}`} on:click={() => void copyLayer(ref, selectedRefContext.label === 'Refs' ? 'Ref' : 'Branch')}><span class="copy-target">{ref}</span></button>{/each}
           {:else}
             <span class="muted">none</span>
           {/if}
@@ -247,7 +255,7 @@
         {/if}
         {#if reviewLink}
           <dt>Review</dt>
-          <dd><button class="review-link" type="button" title={reviewLink.url} on:click={() => onOpenExternalURL(reviewLink?.url ?? '')}>↗ {reviewLink.label}</button></dd>
+          <dd class="review-field"><button class="review-link" type="button" title={reviewLink.url} on:click={() => onOpenExternalURL(reviewLink?.url ?? '')}>↗ {reviewLink.label}</button></dd>
         {/if}
       </dl>
       <div class="inspector-actions">
