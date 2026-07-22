@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: commit
-last_updated: 2026-07-21
+last_updated: 2026-07-23
 ---
 
 # Commit Module
@@ -61,9 +61,11 @@ Preset이 활성화되면 이미 load된 commit만 검사하고 멈추지 않는
 
 ## Commit table과 Inspector
 
-Commit table은 별도 header와 cell border 없이 branch/ref badge, graph, subject 순서의 32px compact row로 표시한다. Commit hash, author와 date는 table에서 제거하고 Inspector에서 확인한다. Branch/ref badge는 graph 왼쪽의 고정 column에 두고 모든 primary badge를 같은 폭으로 표시하며 긴 이름은 ellipsis로 줄인다. 표시할 ref가 여러 개면 default branch를 우선한 첫 badge와 별도 고정 폭의 `+N` badge만 노출한다. Remote badge를 숨기는 설정이 적용된 ref는 `N`에 포함하지 않는다. Graph는 load된 commit의 parent 관계를 표현하고 default branch lane을 가장 왼쪽에 유지한다. 종료된 lane의 오른쪽 lane은 빈 공간을 남기지 않고 왼쪽으로 collapse한다. 동시에 표시하는 실제 lane은 최대 6개이며, 그 밖의 topology는 별도의 `~` lane으로 축약한다.
+Commit table은 별도 header와 cell border 없이 branch/ref badge, graph, subject 순서의 32px compact row로 표시한다. Commit hash, author와 date는 table에서 제거하고 Inspector에서 확인한다. Branch/ref badge는 graph 왼쪽의 고정 column에 두고 모든 primary badge를 같은 폭으로 표시하며 긴 이름은 ellipsis로 줄인다. Primary badge의 text, border와 background tint는 해당 commit node의 graph lane 색상을 사용한다. 표시할 ref가 여러 개면 default branch를 우선한 첫 badge와 중립색의 별도 고정 폭 `+N` badge만 노출한다. Remote badge를 숨기는 설정이 적용된 ref는 `N`에 포함하지 않는다. Graph는 load된 commit의 parent 관계를 표현하고 default branch lane을 가장 왼쪽에 유지한다. Default branch의 node, first-parent line과 badge는 첫 palette blue로 고정하며 side lineage의 생성, collapse 또는 merge가 이 색상을 덮어쓰지 않는다. 종료된 lane의 오른쪽 lane은 빈 공간을 남기지 않고 왼쪽으로 collapse한다. Lane color는 현재 x 위치가 아니라 active commit lineage에 속하므로, 같은 lineage가 빈 lane을 메우기 위해 왼쪽으로 이동해도 색상을 유지한다. Commit table 폭에 비례해 실제 lane을 6개에서 10개까지 표시하되, message 영역을 더 침범하지 않도록 10개를 상한으로 둔다. 이 범위의 lane color는 반복하지 않는다. 상한을 넘는 topology는 마지막 중립색 dashed lane 하나로 collapse한다. 실제 lane과 overflow lane 사이의 연결선은 branch 색과 중립색 사이의 gradient를 사용해 색상 전환 위치를 보존한다.
 
-Graph는 row마다 SVG를 만들지 않고 visible history 전체 높이를 소유하는 하나의 fixed-width SVG overlay로 그린다. Scroll은 이 overlay를 table content와 함께 이동시킬 뿐 draw를 다시 실행하지 않는다. History page나 Preset 결과가 바뀌면 visible commit topology를 먼저 완성한 뒤 overlay 하나를 교체해 기존 row와 새 row가 서로 다른 lane 좌표를 잠시 사용하는 상태를 만들지 않는다. Preset으로 중간 commit이 숨겨지면 hidden chain을 가장 가까운 visible ancestor로 collapse한 뒤 graph를 계산한다. 행을 선택하면 Inspector가 다음 정보를 제공한다.
+Graph는 row마다 SVG를 만들지 않고 visible history 전체 높이를 소유하는 하나의 responsive-width SVG overlay로 그린다. Scroll은 이 overlay를 table content와 함께 이동시킬 뿐 draw를 다시 실행하지 않는다. Table 또는 Inspector 폭이 바뀌면 표시 가능한 lane 수와 graph width를 다시 계산한다. History page나 Preset 결과가 바뀌면 visible commit topology를 먼저 완성한 뒤 overlay 하나를 교체해 기존 row와 새 row가 서로 다른 lane 좌표를 잠시 사용하는 상태를 만들지 않는다. Preset으로 중간 commit이 숨겨지면 hidden chain을 가장 가까운 visible ancestor로 collapse한 뒤 graph를 계산한다. Default chain의 first parent가 side lane에 이미 예약되어 있어도 lane 0으로 재배치하고 기존 side lane을 합류시켜 MR 사이의 default line을 유지한다.
+
+Commit 날짜 구분선은 현재 local calendar를 기준으로 최근 7일은 일별, 같은 해의 그 이전 history는 월별, 이전 해는 연별로 표시한다. 월별 label은 해당 월의 `1.`로, 연별 label은 해당 연도의 `1. 1.`로 정규화한다. Separator가 추가한 높이는 graph 좌표에도 반영하고 lane은 separator 아래까지 연속해서 그린다. 행을 선택하면 Inspector가 다음 정보를 제공한다.
 
 - Full commit hash, message, author, date와 refs
 - 직접 가리키는 ref가 없는 merge second-parent commit은 merge source를 `Branch`로 표시하고, 이를 복원할 근거가 없을 때만 local branch containment를 `Branches`로 표시

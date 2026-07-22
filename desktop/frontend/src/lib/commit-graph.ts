@@ -1,12 +1,17 @@
 import type { CommitSummary } from './types'
+import { maximumVisibleGraphLanes, minimumVisibleGraphLanes } from './commit-graph-sizing.ts'
+
+export const defaultBranchGraphColorIndex = 0
 
 export type GraphEdge = {
+  color: number
   from: number
   to: number
 }
 
 export type GraphRow = {
   lane: number
+  nodeColor: number
   nodeOverflow: boolean
   overflowLane: number | null
   passThrough: GraphEdge[]
@@ -19,8 +24,6 @@ export type GraphLayout = {
   laneCount: number
   historicalBranches: Map<string, string>
 }
-
-export const maxVisibleGraphLanes = 6
 
 export function projectVisibleCommits(items: CommitSummary[], visibleCommits: Set<string>): CommitSummary[] {
   if (visibleCommits.size === items.length) return items
@@ -92,14 +95,55 @@ function historicalBranchLabels(items: CommitSummary[], commitsByID: Map<string,
   return labels
 }
 
-function compactLanes(lanes: Array<string | null>, reserveDefaultLane: boolean): Array<string | null> {
-  const compacted: Array<string | null> = reserveDefaultLane ? [lanes[0] ?? null] : []
+function primaryBranchHead(items: CommitSummary[], primaryBranch: string): CommitSummary | undefined {
+  if (!primaryBranch) return undefined
+
+  const remoteHead = items.find((commit) => (commit.refs ?? []).some((ref) => {
+    if (!ref.endsWith('/HEAD')) return false
+    const remote = ref.slice(0, -'/HEAD'.length)
+    return commit.refs?.includes(`${remote}/${primaryBranch}`)
+  }))
+  return remoteHead
+    ?? items.find((commit) => commit.refs?.includes(primaryBranch))
+    ?? items.find((commit) => commit.refs?.some((ref) => ref.endsWith(`/${primaryBranch}`)))
+}
+
+export function hasPrimaryBranchHead(items: CommitSummary[], primaryBranch: string): boolean {
+  return primaryBranchHead(items, primaryBranch) !== undefined
+}
+
+type ActiveLane = {
+  color: number | null
+  oid: string | null
+}
+
+function emptyLane(): ActiveLane {
+  return { color: null, oid: null }
+}
+
+function compactLanes(lanes: ActiveLane[], reserveDefaultLane: boolean): ActiveLane[] {
+  const compacted: ActiveLane[] = reserveDefaultLane ? [{ ...(lanes[0] ?? emptyLane()) }] : []
+  const seen = new Set(compacted.flatMap((lane) => lane.oid ? [lane.oid] : []))
   const start = reserveDefaultLane ? 1 : 0
   for (let index = start; index < lanes.length; index += 1) {
-    const oid = lanes[index]
-    if (oid !== null && !compacted.includes(oid)) compacted.push(oid)
+    const lane = lanes[index]
+    if (lane.oid !== null && !seen.has(lane.oid)) {
+      compacted.push({ ...lane })
+      seen.add(lane.oid)
+    }
   }
   return compacted
+}
+
+function availableLaneColor(lanes: ActiveLane[], reserveDefaultLane: boolean): number {
+  const used = new Set(lanes.flatMap((lane) => lane.oid !== null && lane.color !== null ? [lane.color] : []))
+  const start = reserveDefaultLane ? defaultBranchGraphColorIndex + 1 : 0
+  for (let color = start; color < maximumVisibleGraphLanes; color += 1) {
+    if (!used.has(color)) return color
+  }
+  let overflowColor = maximumVisibleGraphLanes
+  while (used.has(overflowColor)) overflowColor += 1
+  return overflowColor
 }
 
 function uniqueEdges(edges: GraphEdge[]): GraphEdge[] {
@@ -112,35 +156,34 @@ function uniqueEdges(edges: GraphEdge[]): GraphEdge[] {
   })
 }
 
-function limitRow(row: GraphRow): GraphRow {
-  const overflowLane = maxVisibleGraphLanes
+function limitRow(row: GraphRow, visibleLaneLimit: number): GraphRow {
+  const overflowLane = visibleLaneLimit
   const referencedLanes = [
     row.lane,
     ...row.passThrough.flatMap((edge) => [edge.from, edge.to]),
     ...row.incoming.flatMap((edge) => [edge.from, edge.to]),
     ...row.outgoing.flatMap((edge) => [edge.from, edge.to]),
   ]
-  const truncated = referencedLanes.some((lane) => lane >= maxVisibleGraphLanes)
+  const truncated = referencedLanes.some((lane) => lane >= visibleLaneLimit)
   if (!truncated) return row
 
   const visibleLane = (lane: number): number => Math.min(lane, overflowLane)
   return {
     lane: visibleLane(row.lane),
-    nodeOverflow: row.lane >= maxVisibleGraphLanes,
+    nodeColor: row.nodeColor,
+    nodeOverflow: row.lane >= visibleLaneLimit,
     overflowLane,
-    passThrough: uniqueEdges(row.passThrough.map((edge) => ({ from: visibleLane(edge.from), to: visibleLane(edge.to) }))),
-    incoming: uniqueEdges(row.incoming.map((edge) => ({ from: visibleLane(edge.from), to: visibleLane(edge.to) }))),
-    outgoing: uniqueEdges(row.outgoing.map((edge) => ({ from: visibleLane(edge.from), to: visibleLane(edge.to) }))),
+    passThrough: uniqueEdges(row.passThrough.map((edge) => ({ ...edge, from: visibleLane(edge.from), to: visibleLane(edge.to) }))),
+    incoming: uniqueEdges(row.incoming.map((edge) => ({ ...edge, from: visibleLane(edge.from), to: visibleLane(edge.to) }))),
+    outgoing: uniqueEdges(row.outgoing.map((edge) => ({ ...edge, from: visibleLane(edge.from), to: visibleLane(edge.to) }))),
   }
 }
 
-export function buildCommitGraph(items: CommitSummary[], primaryBranch: string): GraphLayout {
+export function buildCommitGraph(items: CommitSummary[], primaryBranch: string, visibleLaneLimit = minimumVisibleGraphLanes): GraphLayout {
   const commitsByID = new Map(items.map((commit) => [commit.commit, commit]))
   const historicalBranches = historicalBranchLabels(items, commitsByID)
   const defaultChain = new Set<string>()
-  const defaultHead = primaryBranch
-    ? items.find((commit) => commit.refs?.includes(primaryBranch))
-    : undefined
+  const defaultHead = primaryBranchHead(items, primaryBranch)
 
   let defaultCommit = defaultHead
   while (defaultCommit && !defaultChain.has(defaultCommit.commit)) {
@@ -149,69 +192,81 @@ export function buildCommitGraph(items: CommitSummary[], primaryBranch: string):
   }
 
   const reserveDefaultLane = Boolean(primaryBranch)
-  let lanes: Array<string | null> = reserveDefaultLane ? [null] : []
+  let lanes: ActiveLane[] = reserveDefaultLane ? [emptyLane()] : []
   const rows = new Map<string, GraphRow>()
   let laneCount = lanes.length
 
   for (const commit of items) {
     const onDefaultChain = defaultChain.has(commit.commit)
     let incomingLanes = lanes
-      .map((value, index) => value === commit.commit ? index : -1)
+      .map((value, index) => value.oid === commit.commit ? index : -1)
       .filter((index) => index >= 0)
 
     if (onDefaultChain && !incomingLanes.includes(0)) {
-      lanes[0] = commit.commit
+      lanes[0] = { color: defaultBranchGraphColorIndex, oid: commit.commit }
       incomingLanes = [0, ...incomingLanes]
     } else if (incomingLanes.length === 0) {
       const start = reserveDefaultLane ? 1 : 0
-      const available = lanes.findIndex((value, index) => index >= start && value === null)
+      const available = lanes.findIndex((value, index) => index >= start && value.oid === null)
       const lane = available >= 0 ? available : lanes.length
-      lanes[lane] = commit.commit
+      lanes[lane] = { color: availableLaneColor(lanes, reserveDefaultLane), oid: commit.commit }
       incomingLanes = [lane]
     }
 
     const lane = onDefaultChain ? 0 : incomingLanes[0]
-    const incoming = incomingLanes.map((from) => ({ from, to: lane }))
+    const nodeColor = onDefaultChain
+      ? defaultBranchGraphColorIndex
+      : lanes[lane]?.color ?? availableLaneColor(lanes, reserveDefaultLane)
+    const incoming = incomingLanes.map((from) => ({ color: lanes[from]?.color ?? nodeColor, from, to: lane }))
     const continuing = lanes
-      .map((oid, from) => oid !== null && !incomingLanes.includes(from) ? { oid, from } : null)
-      .filter((value): value is { oid: string; from: number } => value !== null)
+      .map((activeLane, from) => activeLane.oid !== null && activeLane.color !== null && !incomingLanes.includes(from)
+        ? { color: activeLane.color, oid: activeLane.oid, from }
+        : null)
+      .filter((value): value is { color: number; oid: string; from: number } => value !== null)
 
-    for (const index of incomingLanes) lanes[index] = null
+    for (const index of incomingLanes) lanes[index] = emptyLane()
 
-    const parentSources: Array<{ parent: string; from: number }> = []
+    const parentSources: Array<{ color: number; parent: string; from: number }> = []
     for (const [parentIndex, parent] of (commit.parents ?? []).entries()) {
-      let target = lanes.indexOf(parent)
+      let target = onDefaultChain && parentIndex === 0 ? 0 : lanes.findIndex((activeLane) => activeLane.oid === parent)
       if (target < 0) {
-        if (parentIndex === 0 && lanes[lane] === null) {
+        if (parentIndex === 0 && lanes[lane].oid === null) {
           target = lane
         } else {
           const start = reserveDefaultLane ? 1 : 0
-          const available = lanes.findIndex((value, index) => index >= start && value === null)
+          const available = lanes.findIndex((value, index) => index >= start && value.oid === null)
           target = available >= 0 ? available : lanes.length
         }
-        lanes[target] = parent
       }
-      parentSources.push({ parent, from: lane })
+      const existingTarget = lanes[target]
+      const color = existingTarget && existingTarget.oid !== null && existingTarget.color !== null
+        ? existingTarget.color
+        : parentIndex === 0
+          ? nodeColor
+          : availableLaneColor(lanes, reserveDefaultLane)
+      lanes[target] = { color, oid: parent }
+      parentSources.push({ color, parent, from: lane })
     }
 
     lanes = compactLanes(lanes, reserveDefaultLane)
     const bottomLaneByOID = new Map<string, number>()
-    lanes.forEach((oid, index) => {
-      if (oid !== null) bottomLaneByOID.set(oid, index)
+    lanes.forEach((activeLane, index) => {
+      if (activeLane.oid !== null) bottomLaneByOID.set(activeLane.oid, index)
     })
 
     const passThrough = continuing
-      .map(({ oid, from }) => ({ from, to: bottomLaneByOID.get(oid) ?? from }))
+      .map(({ color, oid, from }) => ({ color, from, to: bottomLaneByOID.get(oid) ?? from }))
     const outgoing = parentSources
-      .map(({ parent, from }) => ({ from, to: bottomLaneByOID.get(parent) ?? from }))
+      .map(({ color, parent, from }) => ({ color, from, to: bottomLaneByOID.get(parent) ?? from }))
     const limitedRow = limitRow({
       lane,
+      nodeColor,
       nodeOverflow: false,
       overflowLane: null,
       passThrough: uniqueEdges(passThrough),
       incoming: uniqueEdges(incoming),
       outgoing: uniqueEdges(outgoing),
-    })
+    }, visibleLaneLimit)
 
     laneCount = Math.max(
       laneCount,

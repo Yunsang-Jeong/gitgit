@@ -12,6 +12,7 @@
 | [docs/commit.md](docs/commit.md) | Commit 화면과 commit rewrite 규칙 | history, Preset, Inspector, editing 조건이 바뀔 때 |
 | [docs/worktree.md](docs/worktree.md) | Worktree 화면과 lifecycle 규칙 | worktree 표시 상태, 선택, action, 제거 조건이 바뀔 때 |
 | [docs/search.md](docs/search.md) | Search session과 query semantics | 검색 조건, scope, session lifecycle, 결과 모델이 바뀔 때 |
+| [docs/remote-branches.md](docs/remote-branches.md) | Remote branch 탐색과 Settings 관리 계획 | Remote branch 조회, 선택, 포함 정책을 구현하거나 계획을 바꿀 때 |
 
 ## 문서 유지 규칙
 

@@ -2433,7 +2433,7 @@ kbd {
 
 .commit-body {
   position: relative;
-  min-width: 478px;
+  min-width: calc(var(--history-ref-cell-width) + 96px + 260px);
 }
 
 .commit-grid {
@@ -2529,11 +2529,9 @@ kbd {
   vector-effect: non-scaling-stroke;
 }
 
-.graph-overflow {
-  fill: #8d9da3;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 700;
+.commit-graph-overlay path.overflow {
+  stroke-dasharray: 3 4;
+  opacity: 0.72;
 }
 
 .graph-node-ring {
@@ -2544,6 +2542,31 @@ kbd {
 
 .graph-node-ring.selected {
   fill: #12314a;
+}
+
+.history-date-separator {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  padding: 0 8px;
+  color: #718087;
+  font-size: var(--font-label);
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.history-date-separator time {
+  flex: 0 0 auto;
+}
+
+.history-date-separator span {
+  height: 1px;
+  flex: 1 1 auto;
+  background: #334148;
 }
 
 .history-message-cell {
@@ -2612,6 +2635,13 @@ kbd {
   border-color: #5c4b35;
   background: #332a1d;
   color: #e5bd72;
+}
+
+.history-ref-cell .history-primary-ref,
+.history-ref-cell .history-primary-ref.remote {
+  border-color: var(--history-ref-color, #55a7e8);
+  background: color-mix(in srgb, var(--history-ref-color, #55a7e8) 16%, #0b151a);
+  color: var(--history-ref-color, #55a7e8);
 }
 
 .history-message-cell small.branch-point {
