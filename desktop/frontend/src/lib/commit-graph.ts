@@ -23,6 +23,7 @@ export type GraphLayout = {
   rows: Map<string, GraphRow>
   laneCount: number
   historicalBranches: Map<string, string>
+  historicalBranchTips: Map<string, string>
 }
 
 export function projectVisibleCommits(items: CommitSummary[], visibleCommits: Set<string>): CommitSummary[] {
@@ -74,13 +75,20 @@ function reachableCommits(start: string, commitsByID: Map<string, CommitSummary>
   return reachable
 }
 
-function historicalBranchLabels(items: CommitSummary[], commitsByID: Map<string, CommitSummary>): Map<string, string> {
+function historicalBranchContext(items: CommitSummary[], commitsByID: Map<string, CommitSummary>): {
+  labels: Map<string, string>
+  tips: Map<string, string>
+} {
   const labels = new Map<string, string>()
+  const tips = new Map<string, string>()
   for (const merge of items) {
     if ((merge.parents?.length ?? 0) < 2) continue
     const branch = historicalBranchFromMerge(merge.message)
     if (!branch) continue
     const firstParentHistory = reachableCommits(merge.parents[0], commitsByID)
+    for (const parent of merge.parents.slice(1)) {
+      if (parent && commitsByID.has(parent) && !firstParentHistory.has(parent)) tips.set(parent, branch)
+    }
     const pending = merge.parents.slice(1)
     const visited = new Set<string>()
     while (pending.length > 0) {
@@ -92,10 +100,10 @@ function historicalBranchLabels(items: CommitSummary[], commitsByID: Map<string,
       for (const parent of commitsByID.get(oid)?.parents ?? []) pending.push(parent)
     }
   }
-  return labels
+  return { labels, tips }
 }
 
-function primaryBranchHead(items: CommitSummary[], primaryBranch: string): CommitSummary | undefined {
+function primaryBranchHead(items: CommitSummary[], primaryBranch: string, preferRemoteDefault: boolean): CommitSummary | undefined {
   if (!primaryBranch) return undefined
 
   const remoteHead = items.find((commit) => (commit.refs ?? []).some((ref) => {
@@ -103,13 +111,19 @@ function primaryBranchHead(items: CommitSummary[], primaryBranch: string): Commi
     const remote = ref.slice(0, -'/HEAD'.length)
     return commit.refs?.includes(`${remote}/${primaryBranch}`)
   }))
-  return remoteHead
-    ?? items.find((commit) => commit.refs?.includes(primaryBranch))
-    ?? items.find((commit) => commit.refs?.some((ref) => ref.endsWith(`/${primaryBranch}`)))
+  const exactHead = items.find((commit) => commit.refs?.includes(primaryBranch))
+  const originHead = primaryBranch.includes('/')
+    ? undefined
+    : items.find((commit) => commit.refs?.includes(`origin/${primaryBranch}`))
+  const remoteBranchHead = items.find((commit) => commit.refs?.some((ref) => ref.endsWith(`/${primaryBranch}`)))
+
+  return preferRemoteDefault
+    ? remoteHead ?? originHead ?? remoteBranchHead ?? exactHead
+    : exactHead ?? remoteHead ?? originHead ?? remoteBranchHead
 }
 
-export function hasPrimaryBranchHead(items: CommitSummary[], primaryBranch: string): boolean {
-  return primaryBranchHead(items, primaryBranch) !== undefined
+export function hasPrimaryBranchHead(items: CommitSummary[], primaryBranch: string, preferRemoteDefault = false): boolean {
+  return primaryBranchHead(items, primaryBranch, preferRemoteDefault) !== undefined
 }
 
 type ActiveLane = {
@@ -179,11 +193,18 @@ function limitRow(row: GraphRow, visibleLaneLimit: number): GraphRow {
   }
 }
 
-export function buildCommitGraph(items: CommitSummary[], primaryBranch: string, visibleLaneLimit = minimumVisibleGraphLanes): GraphLayout {
+export function buildCommitGraph(
+  items: CommitSummary[],
+  primaryBranch: string,
+  visibleLaneLimit = minimumVisibleGraphLanes,
+  preferRemoteDefault = false,
+): GraphLayout {
   const commitsByID = new Map(items.map((commit) => [commit.commit, commit]))
-  const historicalBranches = historicalBranchLabels(items, commitsByID)
+  const historicalBranchContextValue = historicalBranchContext(items, commitsByID)
+  const historicalBranches = historicalBranchContextValue.labels
+  const historicalBranchTips = historicalBranchContextValue.tips
   const defaultChain = new Set<string>()
-  const defaultHead = primaryBranchHead(items, primaryBranch)
+  const defaultHead = primaryBranchHead(items, primaryBranch, preferRemoteDefault)
 
   let defaultCommit = defaultHead
   while (defaultCommit && !defaultChain.has(defaultCommit.commit)) {
@@ -279,5 +300,5 @@ export function buildCommitGraph(items: CommitSummary[], primaryBranch: string, 
     rows.set(commit.commit, limitedRow)
   }
 
-  return { rows, laneCount: Math.max(1, laneCount), historicalBranches }
+  return { rows, laneCount: Math.max(1, laneCount), historicalBranches, historicalBranchTips }
 }

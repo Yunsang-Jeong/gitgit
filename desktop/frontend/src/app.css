@@ -2534,6 +2534,11 @@ kbd {
   opacity: 0.72;
 }
 
+.commit-graph-overlay path.primary {
+  stroke-width: 2.5;
+  opacity: 1;
+}
+
 .graph-node-ring {
   fill: #0b151a;
   stroke: #55a7e8;

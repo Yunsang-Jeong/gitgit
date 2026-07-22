@@ -12,6 +12,7 @@
 
   export let commits: CommitSummary[] = []
   export let defaultBranch = ''
+  export let allBranches = false
   export let remotes: RemoteInfo[] = []
   export let remoteBadgeRules: RemoteBadgeRule[] = []
   export let showRemoteBadges = false
@@ -43,10 +44,10 @@
   $: displayedCommits = commits.filter((commit) => isCommitVisible(commit, rules, logic))
   $: historyRows = buildHistoryDateRows(displayedCommits)
   $: historyRowGeometry = buildHistoryRowGeometry(historyRows, commitGraphRowHeight)
-  $: fullGraphLayout = buildCommitGraph(commits, defaultBranch, graphLaneLimit)
+  $: fullGraphLayout = buildCommitGraph(commits, defaultBranch, graphLaneLimit, allBranches)
   $: visibleGraphCommits = projectVisibleCommits(commits, new Set(displayedCommits.map((commit) => commit.commit)))
-  $: visiblePrimaryBranch = hasPrimaryBranchHead(visibleGraphCommits, defaultBranch) ? defaultBranch : ''
-  $: graphLayout = buildCommitGraph(visibleGraphCommits, visiblePrimaryBranch, graphLaneLimit)
+  $: visiblePrimaryBranch = hasPrimaryBranchHead(visibleGraphCommits, defaultBranch, allBranches) ? defaultBranch : ''
+  $: graphLayout = buildCommitGraph(visibleGraphCommits, visiblePrimaryBranch, graphLaneLimit, allBranches)
   $: graphWidth = commitGraphWidthForLaneCount(graphLayout.laneCount)
   $: graphDrawing = buildCommitGraphDrawing(visibleGraphCommits, graphLayout.rows, Boolean(visiblePrimaryBranch), historyRowGeometry.tops, historyRowGeometry.height)
   $: graphVersion = `${graphLaneLimit}|${visiblePrimaryBranch}|${historyRows.map((row) => `${row.separator?.key ?? ''}:${row.commit.commit}:${(row.commit.parents ?? []).join(',')}`).join(';')}`
@@ -138,7 +139,7 @@
               {/each}
             </defs>
             {#each graphDrawing.paths as path, index (path.gradientID ?? `${path.color}:${path.overflow}:${index}`)}
-              <path class:overflow={path.overflow} d={path.d} stroke={path.gradientID ? `url(#${path.gradientID})` : path.color} />
+              <path class:overflow={path.overflow} class:primary={path.primary} d={path.d} stroke={path.gradientID ? `url(#${path.gradientID})` : path.color} />
             {/each}
             {#each graphDrawing.nodes as node (node.commit)}
               {#if node.primary}
@@ -156,6 +157,7 @@
               </div>
             {/if}
             {@const historicalBranch = fullGraphLayout.historicalBranches.get(commit.commit) ?? ''}
+            {@const historicalBranchTip = fullGraphLayout.historicalBranchTips.get(commit.commit) ?? ''}
             {@const presentedCommit = historicalBranch ? { ...commit, historical_branch: historicalBranch } : commit}
             {@const refSummary = summarizeRefBadges(commit.refs, remotes, remoteBadgeRules, showRemoteBadges, defaultBranch)}
             {@const primaryRef = refSummary.primary}
@@ -179,6 +181,10 @@
                   {#if refSummary.remaining.length}
                     <small class="history-ref-count" title={`Additional refs: ${refSummary.remaining.map((badge) => badge.title).join(', ')}`} aria-label={`${refSummary.remaining.length} additional refs`}>+{refSummary.remaining.length}</small>
                   {/if}
+                {:else if historicalBranchTip}
+                  <small class="history-primary-ref history-branch-tip" style={`--history-ref-color: ${refColor}`} title={`Merged branch: ${historicalBranchTip}`} aria-label={`Merged branch ${historicalBranchTip}`}>
+                    <span>{historicalBranchTip}</span>
+                  </small>
                 {/if}
               </span>
               <span class="graph-cell" role="cell" aria-label={`${(commit.parents ?? []).length} parents`}>

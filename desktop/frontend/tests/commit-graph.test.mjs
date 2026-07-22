@@ -31,6 +31,8 @@ test('pull request commits keep their historical branch after the ref is deleted
   assert.equal(layout.historicalBranches.get('target'), 'aws_s3_buckets')
   assert.equal(layout.historicalBranches.has('base'), false)
   assert.equal(layout.historicalBranches.has('merge'), false)
+  assert.equal(layout.historicalBranchTips.get('topic-head'), 'aws_s3_buckets')
+  assert.equal(layout.historicalBranchTips.has('target'), false)
 })
 
 test('GitLab-style merge messages expose the source branch', () => {
@@ -42,6 +44,21 @@ test('GitLab-style merge messages expose the source branch', () => {
   ], 'main')
 
   assert.equal(layout.historicalBranches.get('topic'), 'feature/search')
+  assert.equal(layout.historicalBranchTips.get('topic'), 'feature/search')
+})
+
+test('each non-first parent of an octopus merge is marked as a historical branch tip', () => {
+  const layout = buildCommitGraph([
+    commit('merge', ['main-work', 'topic-a', 'topic-b'], ['main'], "Merge branch 'release/candidates' into 'main'"),
+    commit('main-work', ['base']),
+    commit('topic-a', ['base']),
+    commit('topic-b', ['base']),
+    commit('base'),
+  ], 'main')
+
+  assert.equal(layout.historicalBranchTips.get('topic-a'), 'release/candidates')
+  assert.equal(layout.historicalBranchTips.get('topic-b'), 'release/candidates')
+  assert.equal(layout.historicalBranchTips.has('base'), false)
 })
 
 test('default branch stays left while a completed merge lane collapses into it', () => {
@@ -107,18 +124,39 @@ test('default branch keeps its fixed color through side merges and lane compacti
   const defaultColor = commitGraphLaneColor(defaultBranchGraphColorIndex)
   assert.ok(drawing.nodes.filter((node) => defaultCommits.includes(node.commit)).every((node) => node.color === defaultColor))
   assert.ok(drawing.paths.some((path) => path.color === defaultColor && !path.gradientID))
+  assert.equal(drawing.paths.at(-1).color, defaultColor)
+  assert.equal(drawing.paths.at(-1).primary, true)
 })
 
-test('remote default HEAD owns the fixed color when the local branch is behind', () => {
+test('default path is painted after side paths at merge intersections', () => {
   const items = [
-    commit('remote-head', ['remote-next', 'topic'], ['origin/main', 'origin/HEAD']),
+    commit('merge', ['main-next', 'topic'], ['main']),
+    commit('topic', ['base']),
+    commit('main-next', ['base']),
+    commit('base'),
+  ]
+  const layout = buildCommitGraph(items, 'main', maximumVisibleGraphLanes)
+  const drawing = buildCommitGraphDrawing(items, layout.rows, true)
+  const defaultColor = commitGraphLaneColor(defaultBranchGraphColorIndex)
+  const sidePathIndex = drawing.paths.findIndex((path) => path.color !== defaultColor)
+  const defaultPathIndex = drawing.paths.findIndex((path) => path.primary)
+
+  assert.ok(sidePathIndex >= 0)
+  assert.ok(defaultPathIndex > sidePathIndex)
+  assert.equal(defaultPathIndex, drawing.paths.length - 1)
+  assert.match(drawing.paths[sidePathIndex].d, /M 18 16 C 18 24, 24 24, 24 32/)
+})
+
+test('All branches keeps the remote default blue when its symbolic HEAD decoration is filtered', () => {
+  const items = [
+    commit('remote-head', ['remote-next', 'topic'], ['origin/main']),
     commit('topic', ['remote-base']),
     commit('remote-next', ['remote-base']),
     commit('remote-base', ['local-head']),
     commit('local-head', ['root'], ['main']),
     commit('root'),
   ]
-  const layout = buildCommitGraph(items, 'main', maximumVisibleGraphLanes)
+  const layout = buildCommitGraph(items, 'main', maximumVisibleGraphLanes, true)
   const defaultCommits = ['remote-head', 'remote-next', 'remote-base', 'local-head', 'root']
 
   for (const oid of defaultCommits) {
@@ -126,6 +164,18 @@ test('remote default HEAD owns the fixed color when the local branch is behind',
     assert.equal(layout.rows.get(oid).nodeColor, defaultBranchGraphColorIndex)
   }
   assert.notEqual(layout.rows.get('topic').nodeColor, defaultBranchGraphColorIndex)
+})
+
+test('local branch scope still prefers its exact head over a divergent remote default', () => {
+  const items = [
+    commit('remote-head', ['base'], ['origin/main']),
+    commit('local-head', ['base'], ['main']),
+    commit('base'),
+  ]
+  const layout = buildCommitGraph(items, 'main', maximumVisibleGraphLanes)
+
+  assert.notEqual(layout.rows.get('remote-head').nodeColor, defaultBranchGraphColorIndex)
+  assert.equal(layout.rows.get('local-head').nodeColor, defaultBranchGraphColorIndex)
 })
 
 test('graph starts with six real lanes and one collapsed overflow lane', () => {

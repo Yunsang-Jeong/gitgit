@@ -17,12 +17,14 @@ const laneColors = [
   '#c989d9',
 ]
 const overflowLaneColor = '#65767d'
+const primaryJunctionOffset = 6
 
 export type CommitGraphPath = {
   color: string
   d: string
   gradientID: string | null
   overflow: boolean
+  primary: boolean
 }
 
 export type CommitGraphGradient = {
@@ -89,7 +91,7 @@ function addOverflowTransition(
     y1,
     y2,
   })
-  paths.push({ color: visibleColor, d, gradientID: id, overflow: false })
+  paths.push({ color: visibleColor, d, gradientID: id, overflow: false, primary: false })
 }
 
 export function buildCommitGraphDrawing(
@@ -131,11 +133,13 @@ export function buildCommitGraphDrawing(
     for (const [edgeIndex, edge] of row.incoming.entries()) {
       const fromX = laneX(edge.from)
       const toX = laneX(edge.to)
+      const joinsPrimaryNode = showPrimaryLane && row.lane === 0 && edge.to === row.lane && edge.from !== row.lane
+      const nodeX = joinsPrimaryNode ? toX + Math.sign(fromX - toX) * primaryJunctionOffset : toX
       const fromOverflow = edge.from === row.overflowLane
       const toOverflow = edge.to === row.overflowLane
       const d = edge.from === edge.to
         ? `M ${fromX} ${top} L ${toX} ${middle}`
-        : `M ${fromX} ${top} C ${fromX} ${top + 8}, ${toX} ${top + 8}, ${toX} ${middle}`
+        : `M ${fromX} ${top} C ${fromX} ${top + 8}, ${nodeX} ${top + 8}, ${nodeX} ${middle}`
       if (row.overflowLane !== null && fromOverflow !== toOverflow) {
         addOverflowTransition(gradients, transitionPaths, `commit-overflow-${commit.commit}-in-${edgeIndex}`, d, edge, row.overflowLane, fromX, top, toX, middle)
       } else {
@@ -146,11 +150,13 @@ export function buildCommitGraphDrawing(
     for (const [edgeIndex, edge] of row.outgoing.entries()) {
       const fromX = laneX(edge.from)
       const toX = laneX(edge.to)
+      const leavesPrimaryNode = showPrimaryLane && row.lane === 0 && edge.from === row.lane && edge.to !== row.lane
+      const nodeX = leavesPrimaryNode ? fromX + Math.sign(toX - fromX) * primaryJunctionOffset : fromX
       const fromOverflow = edge.from === row.overflowLane
       const toOverflow = edge.to === row.overflowLane
       const d = edge.from === edge.to
         ? `M ${fromX} ${middle} L ${toX} ${bottom}`
-        : `M ${fromX} ${middle} C ${fromX} ${top + 24}, ${toX} ${top + 24}, ${toX} ${bottom}`
+        : `M ${nodeX} ${middle} C ${nodeX} ${top + 24}, ${toX} ${top + 24}, ${toX} ${bottom}`
       if (row.overflowLane !== null && fromOverflow !== toOverflow) {
         addOverflowTransition(gradients, transitionPaths, `commit-overflow-${commit.commit}-out-${edgeIndex}`, d, edge, row.overflowLane, fromX, middle, toX, bottom)
       } else {
@@ -185,13 +191,22 @@ export function buildCommitGraphDrawing(
 
   const paths: CommitGraphPath[] = [...segments.entries()].map(([key, path]) => {
     const [color, kind] = key.split(':')
-    return { color, d: path.join(' '), gradientID: null, overflow: kind === 'overflow' }
+    const overflow = kind === 'overflow'
+    return {
+      color,
+      d: path.join(' '),
+      gradientID: null,
+      overflow,
+      primary: showPrimaryLane && !overflow && color === commitGraphLaneColor(0),
+    }
   })
+  const primaryPaths = paths.filter((path) => path.primary)
+  const secondaryPaths = paths.filter((path) => !path.primary)
 
   return {
     gradients,
     height: drawingHeight ?? commits.length * commitGraphRowHeight,
     nodes,
-    paths: [...paths, ...transitionPaths],
+    paths: [...secondaryPaths, ...transitionPaths, ...primaryPaths],
   }
 }

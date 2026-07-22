@@ -1472,6 +1472,7 @@
         <CommitTable
           commits={history.commits}
           defaultBranch={repository?.default_branch ?? ''}
+          allBranches={historyAllBranches}
           remotes={repository?.remotes ?? []}
           remoteBadgeRules={appSettings.remote_badges}
           showRemoteBadges={historyAllBranches}
