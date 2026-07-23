@@ -47,7 +47,8 @@ function webRepositoryURL(remoteURL: string): string {
   try {
     const parsed = new URL(value)
     if (!['http:', 'https:', 'ssh:', 'git:'].includes(parsed.protocol) || !parsed.host) return ''
-    return cleanRepositoryURL(`https://${parsed.host}${parsed.pathname}`)
+    const host = parsed.protocol === 'ssh:' || parsed.protocol === 'git:' ? parsed.hostname : parsed.host
+    return cleanRepositoryURL(`https://${host}${parsed.pathname}`)
   } catch {
     return ''
   }

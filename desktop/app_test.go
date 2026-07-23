@@ -2,11 +2,49 @@ package main
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	desktopcore "github.com/yunsang/gitgit/internal/desktop"
 )
+
+func TestDesktopAppDiscoversProjectsOnlyUnderExplicitDirectory(t *testing.T) {
+	root := t.TempDir()
+	discoveryDirectory := filepath.Join(root, "discover-here")
+	insideRepository := filepath.Join(discoveryDirectory, "nested-repository")
+	outsideRepository := filepath.Join(root, "outside-repository")
+	for _, repository := range []string{insideRepository, outsideRepository} {
+		if err := os.MkdirAll(repository, 0o755); err != nil {
+			t.Fatalf("create %s: %v", repository, err)
+		}
+		command := exec.Command("git", "init", "-q", "-b", "main")
+		command.Dir = repository
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git init %s: %v\n%s", repository, err, output)
+		}
+	}
+	canonicalInsideRepository, err := filepath.EvalSymlinks(insideRepository)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", insideRepository, err)
+	}
+
+	app := &DesktopApp{
+		context:  context.Background(),
+		projects: desktopcore.NewProjectStore(filepath.Join(root, "projects.json")),
+	}
+	result, err := app.DiscoverProjects(discoveryDirectory)
+	if err != nil {
+		t.Fatalf("DiscoverProjects(%q): %v", discoveryDirectory, err)
+	}
+	if result.Directory != discoveryDirectory || result.Found != 1 || result.Added != 1 || len(result.Projects) != 1 || result.Projects[0].Root != canonicalInsideRepository {
+		t.Fatalf("DiscoverProjects(%q) = %+v, want only %q", discoveryDirectory, result, canonicalInsideRepository)
+	}
+	if _, err := app.DiscoverProjects(" "); err == nil {
+		t.Fatal("DiscoverProjects with an empty directory unexpectedly succeeded")
+	}
+}
 
 func TestDesktopAppDefersPersistenceUntilStartup(t *testing.T) {
 	constructed := NewDesktopApp()

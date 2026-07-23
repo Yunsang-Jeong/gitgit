@@ -47,6 +47,7 @@
   export let onRegisterProject: () => void
   export let onSelectProject: (project: RegisteredProject) => void
   export let onToggleProjectFavorite: (project: RegisteredProject) => void
+  export let onUnregisterProject: (project: RegisteredProject) => void
   export let onWorktreeChange: (worktree: WorktreeInfo) => void
   export let onScopeChange: (scope: string, allRefs: boolean) => void
   export let onRunSearch: () => void
@@ -76,7 +77,7 @@
 <section class:sessions-collapsed={sessionSidebarCollapsed} class="search-workspace pane">
   <aside class:collapsed={sessionSidebarCollapsed} class="search-session-sidebar">
     <header>
-      <div class="search-session-heading"><strong>Search sessions</strong><span>{sessions.length}</span></div>
+      <div class="search-session-heading"><strong>History</strong><span class="search-session-count">{sessions.length}</span></div>
       <div class="search-session-sidebar-actions">
         <button
           class="search-session-collapse"
@@ -134,6 +135,7 @@
         onRegister={onRegisterProject}
         onSelect={onSelectProject}
         onToggleFavorite={onToggleProjectFavorite}
+        onUnregister={onUnregisterProject}
       />
       <WorktreePicker
         worktrees={repository?.worktrees ?? []}

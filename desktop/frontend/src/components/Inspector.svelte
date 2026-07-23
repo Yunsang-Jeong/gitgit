@@ -15,7 +15,6 @@
   export let remotes: RemoteInfo[] = []
   export let defaultBranch = ''
   export let upstream = ''
-  export let onOpenIDE: (path: string) => void
   export let onOpenFinder: (path: string) => void
   export let onOpenTerminal: (path: string) => void
   export let onOpenExternalURL: (url: string) => void
@@ -258,10 +257,6 @@
           <dd class="review-field"><button class="review-link" type="button" title={reviewLink.url} on:click={() => onOpenExternalURL(reviewLink?.url ?? '')}>↗ {reviewLink.label}</button></dd>
         {/if}
       </dl>
-      <div class="inspector-actions">
-        <button type="button" on:click={() => onOpenIDE(selected.file.path)} disabled={!selected.file.path}>↗ Open IDE</button>
-        <button type="button" on:click={() => onOpenFinder(selected.file.path)} disabled={!selected.file.path}>▱ Open Finder</button>
-      </div>
     </section>
 
     <section class="changed-files">

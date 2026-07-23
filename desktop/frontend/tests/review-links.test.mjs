@@ -35,6 +35,19 @@ test('GitLab merge messages build a merge request URL for a private host', () =>
   })
 })
 
+test('GitLab SSH transport ports are not included in browser merge request URLs', () => {
+  const link = buildReviewLink(
+    "Merge branch 'feature' into 'main'\n\nSee merge request platform/GitGit!73",
+    parents,
+    [{ name: 'origin', url: 'ssh://git@mymy.gitlab.internal:222/platform/GitGit.git' }],
+  )
+  assert.deepEqual(link, {
+    kind: 'merge-request',
+    label: 'MR !73',
+    url: 'https://mymy.gitlab.internal/platform/GitGit/-/merge_requests/73',
+  })
+})
+
 test('explicit review links work while non-merge and ambiguous messages stay unlinked', () => {
   assert.deepEqual(
     buildReviewLink('Merge pull request https://github.com/acme/repo/pull/12.', parents, []),

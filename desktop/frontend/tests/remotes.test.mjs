@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   defaultRemoteBadgeRules,
   defaultFirstRefs,
+  isLocalDefaultBranchBadge,
   isEmbeddedRemoteBadgeIcon,
   inspectorRefContext,
   normalizeRemoteBadgeIcon,
@@ -80,6 +81,12 @@ test('commit rows keep one default-first ref and summarize the rest', () => {
   assert.equal(allSummary.primary?.branch, 'main')
   assert.deepEqual(allSummary.remaining.map((badge) => badge.ref), ['feature/topic', 'origin/main', 'v1.0.0'])
   assert.deepEqual(refs, ['feature/topic', 'origin/main', 'main', 'v1.0.0'])
+})
+
+test('only the local default branch badge gets the dedicated default treatment', () => {
+  assert.equal(isLocalDefaultBranchBadge(resolveRefBadge('main', remotes, defaultRemoteBadgeRules()), 'main'), true)
+  assert.equal(isLocalDefaultBranchBadge(resolveRefBadge('origin/main', remotes, defaultRemoteBadgeRules()), 'main'), false)
+  assert.equal(isLocalDefaultBranchBadge(resolveRefBadge('feature/topic', remotes, defaultRemoteBadgeRules()), 'main'), false)
 })
 
 test('inspector falls back to containing branches when a past commit has no exact ref', () => {

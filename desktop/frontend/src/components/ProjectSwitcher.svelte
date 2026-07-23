@@ -9,6 +9,7 @@
   export let onRegister: () => void
   export let onSelect: (project: RegisteredProject) => void
   export let onToggleFavorite: (project: RegisteredProject) => void
+  export let onUnregister: (project: RegisteredProject) => void
 
   let open = false
   let query = ''
@@ -16,8 +17,13 @@
   let searchInput: HTMLInputElement
 
   $: activeProject = projects.find((project) => project.root === activeProjectRoot)
+  $: activeProjectDisplayName = activeProject?.name ?? projectNameFromRoot(activeProjectRoot)
   $: favorites = projects.filter((project) => project.favorite)
-  $: filteredProjects = projects.filter(matchesQuery)
+  $: filteredProjects = projects
+    .map((project, index) => ({ project, index }))
+    .filter(({ project }) => matchesQuery(project))
+    .sort((left, right) => Number(right.project.favorite) - Number(left.project.favorite) || left.index - right.index)
+    .map(({ project }) => project)
 
   onMount(() => {
     const closeOutside = (event: PointerEvent) => {
@@ -63,6 +69,11 @@
     onRegister()
     close()
   }
+
+  function projectNameFromRoot(projectRoot: string): string {
+    const root = projectRoot.replace(/[\\/]+$/, '')
+    return root.slice(Math.max(root.lastIndexOf('/'), root.lastIndexOf('\\')) + 1) || 'Select project'
+  }
 </script>
 
 <div class="project-switcher" bind:this={root}>
@@ -77,14 +88,17 @@
     on:click={() => void toggle()}
   >
     <span class="project-trigger-label">Project</span>
-    <strong>{activeProject?.name ?? 'Select project'}</strong>
+    <strong>{activeProjectDisplayName}</strong>
     <svg class="project-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
   </button>
 
   {#if open}
     <div class="project-menu" role="dialog" aria-label="Select project">
       <div class="project-search">
-        <span>⌕</span>
+        <svg class="project-search-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="6.5" cy="6.5" r="3.5" />
+          <path d="m9.2 9.2 3 3" />
+        </svg>
         <input bind:this={searchInput} bind:value={query} type="search" placeholder="Search projects…" aria-label="Search registered projects" />
       </div>
       <div class="project-menu-list" role="listbox" aria-label="Registered projects">
@@ -117,6 +131,14 @@
                 aria-label={project.favorite ? `Remove ${project.name} from favorites` : `Add ${project.name} to favorites`}
                 on:click={() => onToggleFavorite(project)}
               >{project.favorite ? '★' : '☆'}</button>
+              <button
+                class="project-remove-toggle"
+                type="button"
+                {disabled}
+                title={`Unregister ${project.name}`}
+                aria-label={`Unregister ${project.name}`}
+                on:click={() => onUnregister(project)}
+              >×</button>
             </div>
           {/each}
         {/if}

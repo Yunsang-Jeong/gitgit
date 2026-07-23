@@ -2,12 +2,12 @@
   import { onDestroy, onMount } from 'svelte'
   import ContextMenu from './ContextMenu.svelte'
   import RemoteBadgeIcon from './RemoteBadgeIcon.svelte'
-  import { buildCommitGraph, defaultBranchGraphColorIndex, hasPrimaryBranchHead, projectVisibleCommits } from '../lib/commit-graph'
+  import { buildCommitGraph, defaultBranchGraphColorIndex, hasPrimaryBranchHead, isLocalPrimaryBranchHead, projectVisibleCommits } from '../lib/commit-graph'
   import { buildCommitGraphDrawing, commitGraphLaneColor, commitGraphRowHeight } from '../lib/commit-graph-render'
   import { commitGraphLaneLimitForWidth, commitGraphWidthForLaneCount, minimumVisibleGraphLanes } from '../lib/commit-graph-sizing'
   import { buildHistoryDateRows, buildHistoryRowGeometry } from '../lib/history-date-rows'
   import { isCommitVisible } from '../lib/history'
-  import { summarizeRefBadges } from '../lib/remotes'
+  import { isLocalDefaultBranchBadge, summarizeRefBadges } from '../lib/remotes'
   import type { CommitFilterLogic, CommitFilterRule, CommitSummary, ContextMenuItem, HistoryFilterProgress, RemoteBadgeRule, RemoteInfo } from '../lib/types'
 
   export let commits: CommitSummary[] = []
@@ -47,10 +47,11 @@
   $: fullGraphLayout = buildCommitGraph(commits, defaultBranch, graphLaneLimit, allBranches)
   $: visibleGraphCommits = projectVisibleCommits(commits, new Set(displayedCommits.map((commit) => commit.commit)))
   $: visiblePrimaryBranch = hasPrimaryBranchHead(visibleGraphCommits, defaultBranch, allBranches) ? defaultBranch : ''
+  $: localDefaultGraphLane = Boolean(visiblePrimaryBranch) && isLocalPrimaryBranchHead(visibleGraphCommits, visiblePrimaryBranch, allBranches)
   $: graphLayout = buildCommitGraph(visibleGraphCommits, visiblePrimaryBranch, graphLaneLimit, allBranches)
   $: graphWidth = commitGraphWidthForLaneCount(graphLayout.laneCount)
   $: graphDrawing = buildCommitGraphDrawing(visibleGraphCommits, graphLayout.rows, Boolean(visiblePrimaryBranch), historyRowGeometry.tops, historyRowGeometry.height)
-  $: graphVersion = `${graphLaneLimit}|${visiblePrimaryBranch}|${historyRows.map((row) => `${row.separator?.key ?? ''}:${row.commit.commit}:${(row.commit.parents ?? []).join(',')}`).join(';')}`
+  $: graphVersion = `${graphLaneLimit}|${visiblePrimaryBranch}|${localDefaultGraphLane}|${historyRows.map((row) => `${row.separator?.key ?? ''}:${row.commit.commit}:${(row.commit.parents ?? []).join(',')}`).join(';')}`
 
   onMount(() => {
     const observer = new ResizeObserver(([entry]) => {
@@ -139,13 +140,13 @@
               {/each}
             </defs>
             {#each graphDrawing.paths as path, index (path.gradientID ?? `${path.color}:${path.overflow}:${index}`)}
-              <path class:overflow={path.overflow} class:primary={path.primary} d={path.d} stroke={path.gradientID ? `url(#${path.gradientID})` : path.color} />
+              <path class:local-default={localDefaultGraphLane && path.primary} class:overflow={path.overflow} class:primary={path.primary} d={path.d} stroke={path.gradientID ? `url(#${path.gradientID})` : path.color} />
             {/each}
             {#each graphDrawing.nodes as node (node.commit)}
               {#if node.primary}
-                <circle class:selected={node.commit === selectedCommit} class="graph-node-ring" cx={node.x} cy={node.y} r="6" />
+                <circle class:local-default={localDefaultGraphLane} class:selected={node.commit === selectedCommit} class="graph-node-ring" cx={node.x} cy={node.y} r="6" />
               {/if}
-              <circle class="graph-node" cx={node.x} cy={node.y} r={node.radius} fill={node.color} />
+              <circle class:local-default={localDefaultGraphLane && node.primary} class="graph-node" cx={node.x} cy={node.y} r={node.radius} fill={node.color} />
             {/each}
           </svg>
         {/key}
@@ -162,7 +163,12 @@
             {@const refSummary = summarizeRefBadges(commit.refs, remotes, remoteBadgeRules, showRemoteBadges, defaultBranch)}
             {@const primaryRef = refSummary.primary}
             {@const graphRow = graphLayout.rows.get(commit.commit)}
-            {@const refColor = graphRow?.nodeOverflow ? '#8d9da3' : commitGraphLaneColor(graphRow?.nodeColor ?? defaultBranchGraphColorIndex)}
+            {@const localDefaultBranch = isLocalDefaultBranchBadge(primaryRef, defaultBranch)}
+            {@const refColor = localDefaultBranch
+              ? '#e7f8ff'
+              : graphRow?.nodeOverflow
+                ? '#8d9da3'
+                : commitGraphLaneColor(graphRow?.nodeColor ?? defaultBranchGraphColorIndex)}
             <div
               class:selected={selectedCommit === commit.commit}
               class="commit-row commit-grid"
@@ -174,7 +180,7 @@
             >
               <span class="history-ref-cell" role="cell">
                 {#if primaryRef}
-                  <small class:remote={primaryRef.remote} class="history-primary-ref" style={`--history-ref-color: ${refColor}`} title={primaryRef.title} aria-label={primaryRef.label}>
+                  <small class:local-default={localDefaultBranch} class:remote={primaryRef.remote} class="history-primary-ref" style={`--history-ref-color: ${refColor}`} title={primaryRef.title} aria-label={primaryRef.label}>
                     {#if primaryRef.remote}<RemoteBadgeIcon name={primaryRef.icon} />{/if}
                     <span>{primaryRef.branch}</span>
                   </small>
@@ -194,6 +200,7 @@
                 {#if commit.commit === branchPoint}
                   <small class="branch-point" title="Common ancestor with the default branch">Branch point</small>
                 {/if}
+                <span class="history-author" title={commit.author.email ? `${commit.author.name} <${commit.author.email}>` : commit.author.name}>{commit.author.name || commit.author.email}</span>
               </button>
             </div>
         {/each}

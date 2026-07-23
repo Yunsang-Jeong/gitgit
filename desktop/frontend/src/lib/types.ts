@@ -79,6 +79,11 @@ export interface ProjectDiscoveryResult {
   projects: RegisteredProject[]
 }
 
+export interface ProjectPruneResult {
+  removed: RegisteredProject[]
+  projects: RegisteredProject[]
+}
+
 export interface AppSettings {
   history_batch_size: number
   ide: IDEPreference

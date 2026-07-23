@@ -23,6 +23,9 @@
   export let onScopeChange: (scope: string, allBranches: boolean) => void
   export let onWorktreeChange: (worktree: WorktreeInfo) => void
   export let onOpenCommitEditor: () => void
+  export let onOpenWorktree: () => void
+  export let onOpenWorktreeInTerminal: () => void
+  export let onOpenWorktreeInIDE: () => void
   export let onTogglePreset: (id: string) => void
 
   function changeScope(nextScope: string, nextAllBranches: boolean): void {
@@ -35,10 +38,14 @@
 
 <section class="history-toolbar" aria-label="Commit controls">
   <div class="history-toolbar-main">
-    <h1>Commits</h1>
     <WorktreePicker {worktrees} activeRoot={activeWorktreeRoot} projectRoot={activeProjectRoot} {disabled} onChange={onWorktreeChange} />
     <BranchScopePicker {scope} {allBranches} {branches} {worktrees} {defaultBranch} {currentBranch} {currentDetached} {currentHead} {activeWorktreeRoot} {disabled} onChange={changeScope} />
-    <button class="history-action" type="button" on:click={onOpenCommitEditor} disabled={disabled || !canEditCommits} title={editDisabledReason || `Rewrite the selected commit through the checked-out branch${currentBranch ? ` ${currentBranch}` : ''} HEAD`}>Edit commits</button>
+    <div class="history-toolbar-actions" aria-label="Worktree actions">
+      <button class="history-action" type="button" on:click={onOpenCommitEditor} disabled={disabled || !canEditCommits} title={editDisabledReason || `Rewrite the selected commit through the checked-out branch${currentBranch ? ` ${currentBranch}` : ''} HEAD`}>Edit commits</button>
+      <button class="history-action history-worktree-action" type="button" on:click={onOpenWorktree} {disabled} title="Open the current worktree in Finder">▱ Open Finder</button>
+      <button class="history-action history-worktree-action" type="button" on:click={onOpenWorktreeInTerminal} {disabled} title="Open the current worktree in Terminal">⌘ Open Terminal</button>
+      <button class="history-action history-worktree-action" type="button" on:click={onOpenWorktreeInIDE} {disabled} title="Open the current worktree in the configured IDE">↗ Open IDE</button>
+    </div>
   </div>
 
   <div class="criteria-summary-bar preset-summary-bar" aria-label="Commit filter presets">

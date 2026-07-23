@@ -13,11 +13,15 @@
   export let remotes: RemoteInfo[] = []
   export let remoteBadgeRules: RemoteBadgeRule[] = []
   export let discovering = false
+  export let pruningProjects = false
   export let discoveryMessage = ''
   export let onClose: () => void
   export let onRegisterProject: () => void
-  export let onDiscoverProjects: () => void
+  export let onDiscoverProjects: (directory: string) => void
+  export let onChooseDiscoveryDirectory: () => Promise<string>
+  export let onRemoveUnavailableProjects: () => void
   export let onToggleFavorite: (project: RegisteredProject) => void
+  export let onUnregisterProject: (project: RegisteredProject) => void
   export let onHistoryBatchSizeChange: (value: number) => void
   export let onIDEChange: (value: IDEPreference) => void
   export let onTerminalChange: (value: TerminalPreference) => void
@@ -25,6 +29,11 @@
   export let onPresetsChange: (value: CommitFilterPreset[]) => void
   export let onResetPresets: () => void
   export let onRemoteBadgeRulesChange: (value: RemoteBadgeRule[]) => void
+
+  let discoveryDialogOpen = false
+  let discoveryDirectory = ''
+  let choosingDiscoveryDirectory = false
+  let discoverySelectionError = ''
 
   function handleKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
@@ -47,6 +56,46 @@
 
   function changeChangedFilesView(event: Event): void {
     onChangedFilesViewChange((event.currentTarget as HTMLSelectElement).value as ChangedFilesView)
+  }
+
+  function openDiscoveryDialog(): void {
+    discoveryDialogOpen = true
+    discoverySelectionError = ''
+  }
+
+  function closeDiscoveryDialog(): void {
+    if (choosingDiscoveryDirectory) return
+    discoveryDialogOpen = false
+    discoverySelectionError = ''
+  }
+
+  async function chooseDiscoveryDirectory(): Promise<void> {
+    if (choosingDiscoveryDirectory) return
+    choosingDiscoveryDirectory = true
+    discoverySelectionError = ''
+    try {
+      const directory = await onChooseDiscoveryDirectory()
+      if (directory) discoveryDirectory = directory
+    } catch (error) {
+      discoverySelectionError = error instanceof Error ? error.message : String(error)
+    } finally {
+      choosingDiscoveryDirectory = false
+    }
+  }
+
+  function submitDiscovery(): void {
+    const directory = discoveryDirectory.trim()
+    if (!directory || discovering) return
+    discoveryDialogOpen = false
+    discoverySelectionError = ''
+    onDiscoverProjects(directory)
+  }
+
+  function handleDiscoveryKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    closeDiscoveryDialog()
   }
 
   function updatePresetLabel(id: string, label: string): void {
@@ -113,7 +162,6 @@
           <h1 id="settings-title">Settings</h1>
           <span>GitGit preferences</span>
         </div>
-        <kbd>⌘,</kbd>
         <button type="button" on:click={onClose} aria-label="Close settings">×</button>
       </header>
 
@@ -126,9 +174,16 @@
             </div>
             <div class="settings-project-actions">
               <button type="button" on:click={onRegisterProject}>＋ Register</button>
-              <button class="primary" type="button" on:click={onDiscoverProjects} disabled={discovering}>
+              <button class="primary" type="button" on:click={openDiscoveryDialog} disabled={discovering}>
                 {discovering ? 'Discovering…' : '⌕ Discover recursively'}
               </button>
+              <button
+                class="settings-project-prune-button"
+                type="button"
+                on:click={onRemoveUnavailableProjects}
+                disabled={pruningProjects || projects.length === 0}
+                title="Remove registered entries whose path is missing or is no longer a Git worktree"
+              >{pruningProjects ? 'Checking…' : 'Remove unavailable'}</button>
             </div>
           </div>
 
@@ -141,13 +196,16 @@
                   <strong>{project.name}</strong>
                   <small>{project.root}</small>
                 </span>
-                <button
-                  class:favorite={project.favorite}
-                  class="settings-favorite-button"
-                  type="button"
-                  on:click={() => onToggleFavorite(project)}
-                  aria-label={project.favorite ? `Remove ${project.name} from favorites` : `Add ${project.name} to favorites`}
-                ><span>{project.favorite ? '★' : '☆'}</span>Favorite</button>
+                <span class="settings-project-controls">
+                  <button
+                    class:favorite={project.favorite}
+                    class="settings-favorite-button"
+                    type="button"
+                    on:click={() => onToggleFavorite(project)}
+                    aria-label={project.favorite ? `Remove ${project.name} from favorites` : `Add ${project.name} to favorites`}
+                  ><span>{project.favorite ? '★' : '☆'}</span>Favorite</button>
+                  <button class="settings-project-remove-button" type="button" on:click={() => onUnregisterProject(project)}>Remove</button>
+                </span>
               </div>
             {:else}
               <div class="settings-project-empty">No registered projects</div>
@@ -281,7 +339,7 @@
         <section class="settings-section settings-history-section">
           <div>
             <h2>Default IDE</h2>
-            <p>Used by Open IDE on worktree cards and Inspector files.</p>
+            <p>Used by Open IDE on worktree cards.</p>
           </div>
           <label class="settings-field">
             <span>Application</span>
@@ -312,6 +370,30 @@
           </label>
         </section>
       </div>
+
+      {#if discoveryDialogOpen}
+        <div class="project-discovery-backdrop" role="presentation" on:mousedown={closeDiscoveryDialog}>
+          <div class="project-discovery-dialog" role="dialog" aria-modal="true" aria-labelledby="project-discovery-title" tabindex="-1" on:mousedown|stopPropagation on:keydown={handleDiscoveryKeydown}>
+            <form on:submit|preventDefault={submitDiscovery}>
+              <h2 id="project-discovery-title">Discover Git projects</h2>
+              <p>Choose a directory to scan recursively. Only Git repositories beneath that directory are registered; repositories and worktrees are not changed.</p>
+              <label class="project-discovery-directory">
+                <span>Directory</span>
+                <input bind:value={discoveryDirectory} aria-label="Directory to discover" placeholder="/path/to/directory" autocomplete="off" />
+              </label>
+              <div class="project-discovery-choose">
+                <button type="button" on:click={() => void chooseDiscoveryDirectory()} disabled={choosingDiscoveryDirectory}>{choosingDiscoveryDirectory ? 'Choosing…' : '⌕ Choose folder…'}</button>
+                <span>Or enter a path.</span>
+              </div>
+              {#if discoverySelectionError}<p class="project-discovery-error">{discoverySelectionError}</p>{/if}
+              <footer>
+                <button type="button" on:click={closeDiscoveryDialog} disabled={choosingDiscoveryDirectory}>Cancel</button>
+                <button class="primary" type="submit" disabled={!discoveryDirectory.trim() || discovering}>Discover projects</button>
+              </footer>
+            </form>
+          </div>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}

@@ -1,15 +1,19 @@
-import type { CommitDetail, CommitEditStack, CommitFileContent, HistoryBranchesResponse, HistoryRequest, HistoryResponse, ProjectDiscoveryResult, RegisteredProject, RemoteSyncResult, RepositoryState, RepositoryTreeResponse, RewriteCommitsRequest, RewriteCommitsResponse, SearchProgress, SearchRequest, SearchResponse } from './types'
+import type { CommitDetail, CommitEditStack, CommitFileContent, HistoryBranchesResponse, HistoryRequest, HistoryResponse, ProjectDiscoveryResult, ProjectPruneResult, RegisteredProject, RemoteSyncResult, RepositoryState, RepositoryTreeResponse, RewriteCommitsRequest, RewriteCommitsResponse, SearchProgress, SearchRequest, SearchResponse } from './types'
 
 type Backend = {
   Version: () => Promise<string>
   InitialState: () => Promise<RepositoryState>
   Projects: () => Promise<RegisteredProject[]>
   SetProjectFavorite: (root: string, favorite: boolean) => Promise<RegisteredProject[]>
-  DiscoverProjects: () => Promise<ProjectDiscoveryResult>
+  RemoveProject: (root: string) => Promise<RegisteredProject[]>
+  RemoveUnavailableProjects: () => Promise<ProjectPruneResult>
+  ChooseProjectDiscoveryDirectory: () => Promise<string>
+  DiscoverProjects: (directory: string) => Promise<ProjectDiscoveryResult>
   ChooseRepository: () => Promise<RepositoryState>
   OpenRepository: (path: string) => Promise<RepositoryState>
   Refresh: () => Promise<RepositoryState>
   SyncRemotes: () => Promise<RemoteSyncResult>
+  PullCurrentBranch: () => Promise<RemoteSyncResult>
   History: (request: HistoryRequest) => Promise<HistoryResponse>
   HistoryBranches: (commits: string[]) => Promise<HistoryBranchesResponse>
   CommitDetail: (commit: string, file: string) => Promise<CommitDetail>
@@ -20,11 +24,11 @@ type Backend = {
   Search: (request: SearchRequest) => Promise<SearchResponse>
   CancelSearch: () => Promise<void>
   OpenFile: (path: string) => Promise<void>
-  OpenFileInIDE: (path: string, ide: string) => Promise<void>
   RevealFile: (path: string) => Promise<void>
   OpenInTerminal: (path: string, terminal: string) => Promise<void>
   OpenExternalURL: (url: string) => Promise<void>
   OpenWorktree: (path: string) => Promise<void>
+  OpenWorktreeInTerminal: (path: string, terminal: string) => Promise<void>
   OpenWorktreeInIDE: (path: string, ide: string) => Promise<void>
   RemoveMergedWorktree: (path: string) => Promise<RepositoryState>
   RemoveMergedWorktrees: (paths: string[]) => Promise<RepositoryState>
@@ -57,11 +61,15 @@ export const api = {
   initialState: () => backend().InitialState(),
   projects: () => backend().Projects(),
   setProjectFavorite: (root: string, favorite: boolean) => backend().SetProjectFavorite(root, favorite),
-  discoverProjects: () => backend().DiscoverProjects(),
+  removeProject: (root: string) => backend().RemoveProject(root),
+  removeUnavailableProjects: () => backend().RemoveUnavailableProjects(),
+  chooseProjectDiscoveryDirectory: () => backend().ChooseProjectDiscoveryDirectory(),
+  discoverProjects: (directory: string) => backend().DiscoverProjects(directory),
   chooseRepository: () => backend().ChooseRepository(),
   openRepository: (path: string) => backend().OpenRepository(path),
   refresh: () => backend().Refresh(),
   syncRemotes: () => backend().SyncRemotes(),
+  pullCurrentBranch: () => backend().PullCurrentBranch(),
   history: (request: HistoryRequest) => backend().History(request),
   historyBranches: (commits: string[]) => backend().HistoryBranches(commits),
   commitDetail: (commit: string, file = '') => backend().CommitDetail(commit, file),
@@ -76,11 +84,11 @@ export const api = {
   },
   cancelSearch: () => backend().CancelSearch(),
   openFile: (path: string) => backend().OpenFile(path),
-  openFileInIDE: (path: string, ide: string) => backend().OpenFileInIDE(path, ide),
   revealFile: (path: string) => backend().RevealFile(path),
   openInTerminal: (path: string, terminal: string) => backend().OpenInTerminal(path, terminal),
   openExternalURL: (url: string) => backend().OpenExternalURL(url),
   openWorktree: (path: string) => backend().OpenWorktree(path),
+  openWorktreeInTerminal: (path: string, terminal: string) => backend().OpenWorktreeInTerminal(path, terminal),
   openWorktreeInIDE: (path: string, ide: string) => backend().OpenWorktreeInIDE(path, ide),
   removeMergedWorktree: (path: string) => backend().RemoveMergedWorktree(path),
   removeMergedWorktrees: (paths: string[]) => backend().RemoveMergedWorktrees(paths),

@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/yunsang/gitgit/internal/gitexec"
 )
 
 const projectStoreVersion = 1
@@ -139,6 +142,95 @@ func (s *ProjectStore) SetFavorite(root string, favorite bool) ([]RegisteredProj
 	return nil, errors.New("project is not registered")
 }
 
+func (s *ProjectStore) Remove(root string) ([]RegisteredProject, error) {
+	root, err := projectRootLookupKey(root)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	projects, err := s.read()
+	if err != nil {
+		return nil, err
+	}
+	for index, project := range projects {
+		if project.Root != root {
+			continue
+		}
+		projects = append(projects[:index:index], projects[index+1:]...)
+		if err := s.write(projects); err != nil {
+			return nil, err
+		}
+		return projects, nil
+	}
+	return nil, errors.New("project is not registered")
+}
+
+// PruneUnavailable removes registered entries whose root no longer exists or
+// no longer resolves to that project's Git worktree. It never removes a
+// repository or worktree from disk.
+func (s *ProjectStore) PruneUnavailable(ctx context.Context) ([]RegisteredProject, []RegisteredProject, error) {
+	runner := gitexec.NewRunner()
+	if _, err := runner.Version(ctx); err != nil {
+		return nil, nil, fmt.Errorf("verify Git availability before pruning projects: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	projects, err := s.read()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	retained := make([]RegisteredProject, 0, len(projects))
+	removed := make([]RegisteredProject, 0)
+	for _, project := range projects {
+		available, availabilityErr := registeredProjectAvailable(ctx, runner, project.Root)
+		if availabilityErr != nil {
+			return nil, nil, availabilityErr
+		}
+		if available {
+			retained = append(retained, project)
+			continue
+		}
+		removed = append(removed, project)
+	}
+	if len(removed) > 0 {
+		if err := s.write(retained); err != nil {
+			return nil, nil, err
+		}
+	}
+	return retained, removed, nil
+}
+
+func registeredProjectAvailable(ctx context.Context, runner *gitexec.Runner, root string) (bool, error) {
+	info, err := os.Stat(root)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && !info.IsDir()) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect registered project %q: %w", root, err)
+	}
+
+	repository, err := gitexec.OpenRepository(ctx, runner, root)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return false, nil
+	}
+	registeredRoot, err := projectRootLookupKey(root)
+	if err != nil {
+		return false, err
+	}
+	repositoryRoot, err := projectRootLookupKey(repository.Root)
+	if err != nil {
+		return false, err
+	}
+	return registeredRoot == repositoryRoot, nil
+}
+
 func (s *ProjectStore) read() ([]RegisteredProject, error) {
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -229,4 +321,19 @@ func canonicalProjectRoot(root string) (string, error) {
 		return "", errors.New("project root must be a directory")
 	}
 	return filepath.Clean(resolved), nil
+}
+
+func projectRootLookupKey(root string) (string, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return "", errors.New("project root is required")
+	}
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve project root: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	return filepath.Clean(absolute), nil
 }

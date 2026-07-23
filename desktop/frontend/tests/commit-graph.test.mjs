@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildCommitGraph, defaultBranchGraphColorIndex, projectVisibleCommits } from '../src/lib/commit-graph.ts'
+import { buildCommitGraph, defaultBranchGraphColorIndex, isLocalPrimaryBranchHead, projectVisibleCommits } from '../src/lib/commit-graph.ts'
 import { buildCommitGraphDrawing, commitGraphLaneColor, commitGraphRowHeight } from '../src/lib/commit-graph-render.ts'
 import { commitGraphLaneLimitForWidth, commitGraphMinimumWidth, commitGraphWidthForLaneCount, maximumVisibleGraphLanes, minimumVisibleGraphLanes } from '../src/lib/commit-graph-sizing.ts'
 
@@ -164,6 +164,7 @@ test('All branches keeps the remote default blue when its symbolic HEAD decorati
     assert.equal(layout.rows.get(oid).nodeColor, defaultBranchGraphColorIndex)
   }
   assert.notEqual(layout.rows.get('topic').nodeColor, defaultBranchGraphColorIndex)
+  assert.equal(isLocalPrimaryBranchHead(items, 'main', true), false)
 })
 
 test('local branch scope still prefers its exact head over a divergent remote default', () => {
@@ -176,6 +177,7 @@ test('local branch scope still prefers its exact head over a divergent remote de
 
   assert.notEqual(layout.rows.get('remote-head').nodeColor, defaultBranchGraphColorIndex)
   assert.equal(layout.rows.get('local-head').nodeColor, defaultBranchGraphColorIndex)
+  assert.equal(isLocalPrimaryBranchHead(items, 'main'), true)
 })
 
 test('graph starts with six real lanes and one collapsed overflow lane', () => {

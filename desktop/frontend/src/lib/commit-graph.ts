@@ -126,6 +126,11 @@ export function hasPrimaryBranchHead(items: CommitSummary[], primaryBranch: stri
   return primaryBranchHead(items, primaryBranch, preferRemoteDefault) !== undefined
 }
 
+export function isLocalPrimaryBranchHead(items: CommitSummary[], primaryBranch: string, preferRemoteDefault = false): boolean {
+  const head = primaryBranchHead(items, primaryBranch, preferRemoteDefault)
+  return Boolean(primaryBranch) && Boolean(head?.refs?.includes(primaryBranch))
+}
+
 type ActiveLane = {
   color: number | null
   oid: string | null

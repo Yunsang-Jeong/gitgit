@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: overview
 scope: project
-last_updated: 2026-07-21
+last_updated: 2026-07-24
 ---
 
 # GitGit Overview
@@ -98,6 +98,12 @@ Read 성능은 system Git 경계를 유지하면서 process 수와 중복 parsin
 | Search sessions | Frontend process memory | application 종료 시 삭제 |
 
 `make uninstall`은 설치된 app bundle과 disposable cache를 제거하지만 registered-project list는 유지한다.
+
+등록 project를 해제해도 Git repository나 worktree는 삭제하지 않는다. 현재 열려 있는 project를 해제한 경우에도 현재 worktree는 다른 project를 선택할 때까지 열린 상태로 유지한다.
+
+Settings의 `Remove unavailable`은 경로가 사라졌거나 더 이상 해당 project의 Git worktree가 아닌 registered-project entry만 목록에서 제거한다. Git 실행 환경 오류나 취소가 발생하면 목록을 변경하지 않으며, 이 작업도 repository나 worktree를 삭제하지 않는다.
+
+Settings의 `Discover recursively`는 먼저 사용자가 지정한 directory 아래만 재귀 탐색한다. Native folder chooser 또는 직접 입력한 path를 사용하며, 발견한 Git project root만 등록할 뿐 repository나 worktree를 변경하지 않는다.
 
 ## Repository 선택
 

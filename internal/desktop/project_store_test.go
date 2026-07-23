@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -119,5 +120,94 @@ func TestProjectStoreAddsManyProjectsOnce(t *testing.T) {
 	}
 	if added != 0 || len(projects) != 2 {
 		t.Fatalf("second add added/projects = %d/%#v, want 0/2", added, projects)
+	}
+}
+
+func TestProjectStoreRemovesRegisteredAndMissingProjects(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	for _, directory := range []string{first, second} {
+		if err := os.Mkdir(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := NewProjectStore(filepath.Join(root, "config", "projects.json"))
+	if _, added, err := store.AddMany([]string{first, second}); err != nil || added != 2 {
+		t.Fatalf("register projects = added:%d err:%v", added, err)
+	}
+	registered, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingRoot := registered[0].Root
+	remainingRoot := registered[1].Root
+	if err := os.RemoveAll(first); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := store.Remove(missingRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Root != remainingRoot {
+		t.Fatalf("remaining projects = %#v, want only %q", projects, remainingRoot)
+	}
+	if _, err := store.Remove(missingRoot); err == nil {
+		t.Fatal("expected removing an unregistered project to fail")
+	}
+	reloaded, err := NewProjectStore(filepath.Join(root, "config", "projects.json")).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded) != 1 || reloaded[0].Root != remainingRoot {
+		t.Fatalf("reloaded projects = %#v, want only %q", reloaded, remainingRoot)
+	}
+}
+
+func TestProjectStorePrunesUnavailableProjects(t *testing.T) {
+	root := t.TempDir()
+	valid := filepath.Join(root, "valid")
+	missing := filepath.Join(root, "missing")
+	notGit := filepath.Join(root, "not-git")
+	for _, directory := range []string{valid, missing, notGit} {
+		if err := os.Mkdir(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, valid, nil, "init", "-q", "-b", "main")
+
+	store := NewProjectStore(filepath.Join(root, "config", "projects.json"))
+	registered, added, err := store.AddMany([]string{valid, missing, notGit})
+	if err != nil || added != 3 {
+		t.Fatalf("register projects = added:%d err:%v", added, err)
+	}
+	if err := os.RemoveAll(missing); err != nil {
+		t.Fatal(err)
+	}
+
+	projects, removed, err := store.PruneUnavailable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Root != registered[0].Root {
+		t.Fatalf("retained projects = %#v, want only %#v", projects, registered[0])
+	}
+	if len(removed) != 2 {
+		t.Fatalf("removed projects = %#v, want missing and non-Git projects", removed)
+	}
+	removedRoots := map[string]bool{}
+	for _, project := range removed {
+		removedRoots[project.Root] = true
+	}
+	if !removedRoots[registered[1].Root] || !removedRoots[registered[2].Root] {
+		t.Fatalf("removed projects = %#v, want %#v and %#v", removed, registered[1], registered[2])
+	}
+
+	reloaded, err := NewProjectStore(filepath.Join(root, "config", "projects.json")).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded) != 1 || reloaded[0] != projects[0] {
+		t.Fatalf("reloaded projects = %#v, want %#v", reloaded, projects)
 	}
 }

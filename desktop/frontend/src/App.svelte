@@ -123,9 +123,13 @@
 
   let refreshing = false
   let syncing = false
+  let pulling = false
   let statusMessage = ''
   let statusKind: StatusKind = 'info'
   let settingsOpen = false
+  let projectPendingRemoval: RegisteredProject | null = null
+  let removingProject = false
+  let pruningProjects = false
   let commitEditorOpen = false
   let commitEditorStack: CommitEditStack | null = null
   let commitEditorLoading = false
@@ -149,6 +153,7 @@
   let filterRequestID = 0
   let searchRequestID = 0
   let syncRequestID = 0
+  let pullRequestID = 0
   let commitEditorRequestID = 0
 
   $: filterRules = resolvePresetRules(appSettings.presets, activePresetIDs, repository?.user ?? { name: '', email: '' })
@@ -606,6 +611,7 @@
     branchRequestID++
     searchRequestID++
     syncRequestID++
+    pullRequestID++
     if (searching) void api.cancelSearch()
     historyLoading = false
     historyLoadingMore = false
@@ -613,6 +619,7 @@
     branchMembershipLoading = false
     searching = false
     syncing = false
+    pulling = false
     refreshing = false
     projectSwitching = true
     commitEditorRequestID++
@@ -632,6 +639,7 @@
     branchRequestID++
     searchRequestID++
     syncRequestID++
+    pullRequestID++
     commitEditorRequestID++
     if (searching) void api.cancelSearch()
     historyLoading = false
@@ -639,6 +647,7 @@
     branchMembershipLoading = false
     searching = false
     syncing = false
+    pulling = false
     refreshing = false
     worktreeSwitching = true
     commitEditorOpen = false
@@ -659,20 +668,67 @@
     }
   }
 
-  async function discoverProjects(): Promise<void> {
+  function requestProjectUnregister(project: RegisteredProject): void {
+    if (repositoryTransitioning || removingProject) return
+    projectPendingRemoval = project
+  }
+
+  async function confirmProjectUnregister(): Promise<void> {
+    const project = projectPendingRemoval
+    if (!project || removingProject) return
+    const isCurrentProject = project.root === activeProjectRoot
+    removingProject = true
+    try {
+      projects = await api.removeProject(project.root)
+      projectPendingRemoval = null
+      setStatus(isCurrentProject
+        ? `${project.name} was unregistered. The current worktree remains open.`
+        : `${project.name} was unregistered.`, 'success')
+    } catch (error) {
+      setStatus(errorText(error), 'error')
+    } finally {
+      removingProject = false
+    }
+  }
+
+  async function discoverProjects(directory: string): Promise<void> {
     if (discoveringProjects) return
     discoveringProjects = true
     discoveryMessage = ''
     try {
-      const result = await api.discoverProjects()
+      const result = await api.discoverProjects(directory)
       projects = result.projects
-      if (!result.canceled) {
-        discoveryMessage = `Found ${result.found} Git project${result.found === 1 ? '' : 's'} · registered ${result.added} new.`
-      }
+      discoveryMessage = `Searched ${result.directory} · found ${result.found} Git project${result.found === 1 ? '' : 's'} · registered ${result.added} new.`
     } catch (error) {
       discoveryMessage = errorText(error)
     } finally {
       discoveringProjects = false
+    }
+  }
+
+  async function removeUnavailableProjects(): Promise<void> {
+    if (pruningProjects) return
+    pruningProjects = true
+    discoveryMessage = ''
+    try {
+      const result = await api.removeUnavailableProjects()
+      projects = result.projects
+      const removedCount = result.removed.length
+      const currentProjectRemoved = result.removed.some((project) => project.root === activeProjectRoot)
+      discoveryMessage = removedCount === 0
+        ? 'All registered Git projects are available.'
+        : `Removed ${removedCount} unavailable Git project${removedCount === 1 ? '' : 's'}.`
+      setStatus(
+        currentProjectRemoved
+          ? `${discoveryMessage} The current worktree remains open.`
+          : discoveryMessage,
+        removedCount > 0 ? 'success' : 'info',
+      )
+    } catch (error) {
+      discoveryMessage = errorText(error)
+      setStatus(discoveryMessage, 'error')
+    } finally {
+      pruningProjects = false
     }
   }
 
@@ -796,7 +852,7 @@
   }
 
   async function refreshRepository(): Promise<void> {
-    if (!repository || refreshing) return
+    if (!repository || refreshing || syncing || pulling) return
     const repositoryRoot = repository.root
     refreshing = true
     try {
@@ -812,7 +868,7 @@
   }
 
   async function syncRemotes(): Promise<void> {
-    if (!repository || syncing) return
+    if (!repository || syncing || pulling) return
     const requestID = ++syncRequestID
     const repositoryRoot = repository.root
     syncing = true
@@ -830,6 +886,28 @@
       if (!isCancellationMessage(message)) setStatus(message, 'error')
     } finally {
       if (requestID === syncRequestID) syncing = false
+    }
+  }
+
+  async function pullCurrentBranch(): Promise<void> {
+    if (!repository || pulling || syncing) return
+    const requestID = ++pullRequestID
+    const repositoryRoot = repository.root
+    pulling = true
+    setStatus()
+    try {
+      const result = await api.pullCurrentBranch()
+      if (requestID !== pullRequestID || repository?.root !== repositoryRoot) return
+      repository = result.state
+      if (result.warnings?.length) setStatus(result.warnings.join(' · '), 'warning')
+      else setStatus('Current branch pulled.', 'success')
+      await loadHistory()
+    } catch (error) {
+      if (requestID !== pullRequestID || repository?.root !== repositoryRoot) return
+      const message = errorText(error)
+      if (!isCancellationMessage(message)) setStatus(message, 'error')
+    } finally {
+      if (requestID === pullRequestID) pulling = false
     }
   }
 
@@ -859,6 +937,33 @@
   async function openWorktreeInIDE(worktree: WorktreeInfo): Promise<void> {
     try {
       await api.openWorktreeInIDE(worktree.path, appSettings.ide)
+    } catch (error) {
+      setStatus(errorText(error), 'error')
+    }
+  }
+
+  async function openCurrentWorktree(): Promise<void> {
+    if (!repository) return
+    try {
+      await api.openWorktree(repository.root)
+    } catch (error) {
+      setStatus(errorText(error), 'error')
+    }
+  }
+
+  async function openCurrentWorktreeInTerminal(): Promise<void> {
+    if (!repository) return
+    try {
+      await api.openWorktreeInTerminal(repository.root, appSettings.terminal)
+    } catch (error) {
+      setStatus(errorText(error), 'error')
+    }
+  }
+
+  async function openCurrentWorktreeInIDE(): Promise<void> {
+    if (!repository) return
+    try {
+      await api.openWorktreeInIDE(repository.root, appSettings.ide)
     } catch (error) {
       setStatus(errorText(error), 'error')
     }
@@ -1368,14 +1473,6 @@
     }
   }
 
-  async function openFileInIDE(path: string): Promise<void> {
-    try {
-      await api.openFileInIDE(path, appSettings.ide)
-    } catch (error) {
-      setStatus(errorText(error), 'error')
-    }
-  }
-
   async function revealFile(path: string): Promise<void> {
     try {
       await api.revealFile(path)
@@ -1432,13 +1529,16 @@
     {activeProjectRoot}
     {refreshing}
     {syncing}
+    {pulling}
     transitioning={repositoryTransitioning}
     view={navigatorView}
     onRegisterProject={() => void chooseRepository()}
     onSelectProject={(project) => void (navigatorView === 'search' ? selectSearchProject(project) : selectProject(project))}
     onToggleProjectFavorite={(project) => void toggleProjectFavorite(project)}
+    onUnregisterProject={requestProjectUnregister}
     onRefresh={() => void refreshRepository()}
     onSync={() => void syncRemotes()}
+    onPull={() => void pullCurrentBranch()}
     onOpenSettings={() => (settingsOpen = true)}
     onViewChange={(view) => void changeNavigatorView(view)}
   />
@@ -1466,6 +1566,9 @@
           onScopeChange={(nextScope, nextAllBranches) => void changeHistoryScope(nextScope, nextAllBranches)}
           onWorktreeChange={(worktree) => void selectWorktree(worktree)}
           onOpenCommitEditor={() => void openCommitEditor()}
+          onOpenWorktree={() => void openCurrentWorktree()}
+          onOpenWorktreeInTerminal={() => void openCurrentWorktreeInTerminal()}
+          onOpenWorktreeInIDE={() => void openCurrentWorktreeInIDE()}
           onTogglePreset={togglePreset}
         />
 
@@ -1501,7 +1604,6 @@
         remotes={repository?.remotes ?? []}
         defaultBranch={repository?.default_branch ?? ''}
         upstream={repository?.upstream ?? ''}
-        onOpenIDE={(path) => void openFileInIDE(path)}
         onOpenFinder={(path) => void revealFile(path)}
         onOpenTerminal={(path) => void openInTerminal(path)}
         onOpenExternalURL={(url) => void openExternalURL(url)}
@@ -1554,6 +1656,7 @@
         onRegisterProject={() => void chooseSearchProject()}
         onSelectProject={(project) => void selectSearchProject(project)}
         onToggleProjectFavorite={(project) => void toggleProjectFavorite(project)}
+        onUnregisterProject={requestProjectUnregister}
         onWorktreeChange={(worktree) => void selectSearchWorktree(worktree)}
         onScopeChange={changeSearchScope}
         onRunSearch={() => void runSearch()}
@@ -1571,7 +1674,6 @@
           remotes={repository?.remotes ?? []}
           defaultBranch={repository?.default_branch ?? ''}
           upstream={repository?.upstream ?? ''}
-          onOpenIDE={(path) => void openFileInIDE(path)}
           onOpenFinder={(path) => void revealFile(path)}
           onOpenTerminal={(path) => void openInTerminal(path)}
           onOpenExternalURL={(url) => void openExternalURL(url)}
@@ -1608,11 +1710,15 @@
     remotes={repository?.remotes ?? []}
     remoteBadgeRules={appSettings.remote_badges}
     discovering={discoveringProjects}
+    {pruningProjects}
     {discoveryMessage}
     onClose={() => (settingsOpen = false)}
     onRegisterProject={() => void chooseRepository()}
-    onDiscoverProjects={() => void discoverProjects()}
+    onDiscoverProjects={(directory) => void discoverProjects(directory)}
+    onChooseDiscoveryDirectory={() => api.chooseProjectDiscoveryDirectory()}
+    onRemoveUnavailableProjects={() => void removeUnavailableProjects()}
     onToggleFavorite={(project) => void toggleProjectFavorite(project)}
+    onUnregisterProject={requestProjectUnregister}
     onHistoryBatchSizeChange={updateHistoryBatchSize}
     onIDEChange={updateIDE}
     onTerminalChange={updateTerminal}
@@ -1621,6 +1727,21 @@
     onResetPresets={resetPresets}
     onRemoteBadgeRulesChange={updateRemoteBadges}
   />
+  {#if projectPendingRemoval}
+    <div class="project-remove-backdrop" role="presentation" on:mousedown={() => !removingProject && (projectPendingRemoval = null)}>
+      <div class="project-remove-dialog" role="dialog" aria-modal="true" aria-labelledby="project-remove-title" tabindex="-1" on:mousedown|stopPropagation>
+        <h2 id="project-remove-title">Unregister project?</h2>
+        <p><strong>{projectPendingRemoval.name}</strong> will be removed from GitGit’s project list. Its repository and worktrees will not be deleted.</p>
+        {#if projectPendingRemoval.root === activeProjectRoot}
+          <p class="project-remove-current-note">The current worktree will stay open until you select another project.</p>
+        {/if}
+        <footer>
+          <button type="button" on:click={() => (projectPendingRemoval = null)} disabled={removingProject}>Cancel</button>
+          <button class="project-remove-confirm" type="button" on:click={() => void confirmProjectUnregister()} disabled={removingProject}>{removingProject ? 'Removing…' : 'Unregister'}</button>
+        </footer>
+      </div>
+    </div>
+  {/if}
   <CommitEditor
     open={commitEditorOpen}
     stack={commitEditorStack}

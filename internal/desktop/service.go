@@ -222,6 +222,8 @@ func (s *Service) Current(ctx context.Context) (RepositoryState, error) {
 }
 
 func (s *Service) SyncRemotes(ctx context.Context) (RemoteSyncResult, error) {
+	s.rewriteMu.Lock()
+	defer s.rewriteMu.Unlock()
 	operationContext, finish := s.beginOperation(ctx)
 	defer finish()
 	repository, err := s.currentRepository()
@@ -241,6 +243,30 @@ func (s *Service) SyncRemotes(ctx context.Context) (RemoteSyncResult, error) {
 	}
 	if _, err := repository.Run(operationContext, nil, "fetch", "--all", "--prune"); err != nil {
 		return RemoteSyncResult{}, fmt.Errorf("fetch all remotes: %w", err)
+	}
+	state, err := s.snapshot(operationContext, repository)
+	if err != nil {
+		return RemoteSyncResult{}, err
+	}
+	return RemoteSyncResult{State: state}, nil
+}
+
+// PullCurrentBranch fetches and fast-forwards only the checked-out branch.
+// It deliberately rejects divergence instead of creating a merge commit.
+func (s *Service) PullCurrentBranch(ctx context.Context) (RemoteSyncResult, error) {
+	s.rewriteMu.Lock()
+	defer s.rewriteMu.Unlock()
+	operationContext, finish := s.beginOperation(ctx)
+	defer finish()
+	repository, err := s.currentRepository()
+	if err != nil {
+		return RemoteSyncResult{}, err
+	}
+	if _, err := repository.Run(operationContext, nil, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err != nil {
+		return RemoteSyncResult{}, errors.New("the current branch has no upstream; choose a tracking branch before pulling")
+	}
+	if _, err := repository.Run(operationContext, nil, "pull", "--ff-only"); err != nil {
+		return RemoteSyncResult{}, fmt.Errorf("pull current branch with fast-forward only: %w", err)
 	}
 	state, err := s.snapshot(operationContext, repository)
 	if err != nil {

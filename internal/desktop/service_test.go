@@ -459,6 +459,82 @@ func TestSyncRemotesFetchesWithoutMovingLocalBranch(t *testing.T) {
 	}
 }
 
+func TestPullCurrentBranchFastForwardsTrackingBranch(t *testing.T) {
+	repository := createRepository(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, remote, nil, "init", "-q", "--bare")
+	runGit(t, repository, nil, "remote", "add", "origin", remote)
+	runGit(t, repository, nil, "push", "-q", "-u", "origin", "main")
+
+	peerParent := t.TempDir()
+	peer := filepath.Join(peerParent, "peer")
+	runGit(t, peerParent, nil, "clone", "-q", remote, peer)
+	runGit(t, peer, nil, "config", "user.name", "Remote Test")
+	runGit(t, peer, nil, "config", "user.email", "remote@example.com")
+	writeFile(t, filepath.Join(peer, "remote.txt"), "remote update\n")
+	runGit(t, peer, nil, "add", "--all")
+	runGit(t, peer, nil, "commit", "-q", "-m", "feat: remote update")
+	runGit(t, peer, nil, "push", "-q", "origin", "main")
+
+	remoteHead := gitOutput(t, peer, "rev-parse", "HEAD")
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	result, err := service.PullCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("pull current branch: %v", err)
+	}
+	if got := gitOutput(t, repository, "rev-parse", "HEAD"); got != remoteHead {
+		t.Fatalf("pull HEAD = %s, want %s", got, remoteHead)
+	}
+	if result.State.Behind != 0 || result.State.Ahead != 0 {
+		t.Fatalf("pull state ahead/behind = %d/%d", result.State.Ahead, result.State.Behind)
+	}
+}
+
+func TestPullCurrentBranchRejectsDivergenceWithoutMergeCommit(t *testing.T) {
+	repository := createRepository(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, remote, nil, "init", "-q", "--bare")
+	runGit(t, repository, nil, "remote", "add", "origin", remote)
+	runGit(t, repository, nil, "push", "-q", "-u", "origin", "main")
+
+	peerParent := t.TempDir()
+	peer := filepath.Join(peerParent, "peer")
+	runGit(t, peerParent, nil, "clone", "-q", remote, peer)
+	runGit(t, peer, nil, "config", "user.name", "Remote Test")
+	runGit(t, peer, nil, "config", "user.email", "remote@example.com")
+	writeFile(t, filepath.Join(peer, "remote.txt"), "remote update\n")
+	runGit(t, peer, nil, "add", "--all")
+	runGit(t, peer, nil, "commit", "-q", "-m", "feat: remote update")
+	runGit(t, peer, nil, "push", "-q", "origin", "main")
+
+	writeFile(t, filepath.Join(repository, "local.txt"), "local update\n")
+	runGit(t, repository, nil, "add", "--all")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: local update")
+	localHead := gitOutput(t, repository, "rev-parse", "HEAD")
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	if _, err := service.PullCurrentBranch(context.Background()); err == nil {
+		t.Fatal("diverged pull unexpectedly succeeded")
+	}
+	if got := gitOutput(t, repository, "rev-parse", "HEAD"); got != localHead {
+		t.Fatalf("diverged pull changed HEAD from %s to %s", localHead, got)
+	}
+	if count := gitOutput(t, repository, "rev-list", "--count", "--min-parents=2", "HEAD"); count != "0" {
+		t.Fatalf("diverged pull created merge commits: %s", count)
+	}
+}
+
 func TestServiceListsRepositoryTreeByRevisionAndDirectory(t *testing.T) {
 	repository := createRepository(t)
 	service := NewService(nil)

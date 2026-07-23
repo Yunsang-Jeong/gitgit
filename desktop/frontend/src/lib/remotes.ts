@@ -104,3 +104,7 @@ export function summarizeRefBadges(refs: string[] | undefined, remotes: RemoteIn
     remaining: badges.slice(1),
   }
 }
+
+export function isLocalDefaultBranchBadge(badge: RefBadge | null, defaultBranch: string): boolean {
+  return Boolean(defaultBranch) && badge?.ref === defaultBranch
+}

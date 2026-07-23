@@ -38,6 +38,11 @@ type ProjectDiscoveryResult struct {
 	Projects  []desktopcore.RegisteredProject `json:"projects"`
 }
 
+type ProjectPruneResult struct {
+	Removed  []desktopcore.RegisteredProject `json:"removed"`
+	Projects []desktopcore.RegisteredProject `json:"projects"`
+}
+
 type SearchProgressEvent struct {
 	RequestID uint64 `json:"request_id"`
 	Scanned   int    `json:"scanned"`
@@ -187,24 +192,55 @@ func (a *DesktopApp) SetProjectFavorite(root string, favorite bool) ([]desktopco
 	return projects, nil
 }
 
-func (a *DesktopApp) DiscoverProjects() (ProjectDiscoveryResult, error) {
+func (a *DesktopApp) RemoveProject(root string) ([]desktopcore.RegisteredProject, error) {
+	if a.projectStoreErr != nil {
+		return nil, a.projectStoreErr
+	}
+	projects, err := a.projects.Remove(root)
+	if err != nil {
+		return nil, fmt.Errorf("unregister project: %w", err)
+	}
+	return projects, nil
+}
+
+func (a *DesktopApp) RemoveUnavailableProjects() (ProjectPruneResult, error) {
+	if a.projectStoreErr != nil {
+		return ProjectPruneResult{}, a.projectStoreErr
+	}
+	projects, removed, err := a.projects.PruneUnavailable(a.appContext())
+	if err != nil {
+		return ProjectPruneResult{}, fmt.Errorf("remove unavailable projects: %w", err)
+	}
+	return ProjectPruneResult{Removed: removed, Projects: projects}, nil
+}
+
+func (a *DesktopApp) ChooseProjectDiscoveryDirectory() (string, error) {
+	defaultDirectory := ""
+	a.mu.RLock()
+	service := a.service
+	a.mu.RUnlock()
+	if service != nil {
+		if state, err := service.Current(a.appContext()); err == nil {
+			defaultDirectory = state.ProjectRoot
+		}
+	}
+	return runtime.OpenDirectoryDialog(a.appContext(), runtime.OpenDialogOptions{
+		Title:            "Choose directory to discover Git projects",
+		DefaultDirectory: defaultDirectory,
+	})
+}
+
+func (a *DesktopApp) DiscoverProjects(directory string) (ProjectDiscoveryResult, error) {
 	if a.projectStoreErr != nil {
 		return ProjectDiscoveryResult{}, a.projectStoreErr
 	}
-	defaultDirectory := ""
-	if state, currentErr := a.service.Current(a.appContext()); currentErr == nil {
-		defaultDirectory = state.ProjectRoot
+	directory = strings.TrimSpace(directory)
+	if directory == "" {
+		return ProjectDiscoveryResult{}, errors.New("project discovery directory is required")
 	}
-	path, err := runtime.OpenDirectoryDialog(a.appContext(), runtime.OpenDialogOptions{
-		Title:            "Discover Git projects recursively",
-		DefaultDirectory: defaultDirectory,
-	})
+	path, err := filepath.Abs(directory)
 	if err != nil {
-		return ProjectDiscoveryResult{}, err
-	}
-	if path == "" {
-		projects, listErr := a.projects.List()
-		return ProjectDiscoveryResult{Canceled: true, Projects: projects}, listErr
+		return ProjectDiscoveryResult{}, fmt.Errorf("resolve project discovery directory: %w", err)
 	}
 	roots, err := desktopcore.DiscoverGitProjects(a.appContext(), path)
 	if err != nil {
@@ -227,6 +263,10 @@ func (a *DesktopApp) Refresh() (desktopcore.RepositoryState, error) {
 
 func (a *DesktopApp) SyncRemotes() (desktopcore.RemoteSyncResult, error) {
 	return a.service.SyncRemotes(a.appContext())
+}
+
+func (a *DesktopApp) PullCurrentBranch() (desktopcore.RemoteSyncResult, error) {
+	return a.service.PullCurrentBranch(a.appContext())
 }
 
 func (a *DesktopApp) Search(request desktopcore.SearchRequest) (desktopcore.SearchResponse, error) {
@@ -280,14 +320,6 @@ func (a *DesktopApp) OpenFile(path string) error {
 	return openPath(a.appContext(), resolved, false)
 }
 
-func (a *DesktopApp) OpenFileInIDE(path, ide string) error {
-	root, resolved, err := a.repositoryFileContext(path)
-	if err != nil {
-		return err
-	}
-	return openInIDE(a.appContext(), root, resolved, ide)
-}
-
 func (a *DesktopApp) RevealFile(path string) error {
 	resolved, err := a.repositoryFile(path)
 	if err != nil {
@@ -335,6 +367,14 @@ func (a *DesktopApp) OpenWorktree(path string) error {
 		return err
 	}
 	return openPath(a.appContext(), path, false)
+}
+
+func (a *DesktopApp) OpenWorktreeInTerminal(path, terminal string) error {
+	path, err := a.registeredWorktreePath(path)
+	if err != nil {
+		return err
+	}
+	return openTerminal(a.appContext(), path, terminal)
 }
 
 func (a *DesktopApp) OpenWorktreeInIDE(path, ide string) error {
