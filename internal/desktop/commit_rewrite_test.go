@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yunsang/gitgit/internal/app"
 	"github.com/yunsang/gitgit/internal/gitexec"
 )
 
@@ -75,6 +76,9 @@ func TestRewriteCommitsReordersMessagesAndFileContent(t *testing.T) {
 	if len(messages) != 2 || messages[0] != "feat: add second" || messages[1] != "feat: replace value" {
 		t.Fatalf("rewritten messages = %v", messages)
 	}
+	if message := gitOutput(t, repository, "show", "-s", "--format=%B", "HEAD"); strings.Contains(message, rewriteProvenanceTrailer) {
+		t.Fatalf("rewrite without provenance added a trailer: %q", message)
+	}
 	value, err := os.ReadFile(filepath.Join(repository, "value.txt"))
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +88,220 @@ func TestRewriteCommitsReordersMessagesAndFileContent(t *testing.T) {
 	}
 	if status := gitOutput(t, repository, "status", "--porcelain"); status != "" {
 		t.Fatalf("worktree is dirty after rewrite: %q", status)
+	}
+}
+
+func TestRewriteCommitsAppliesAuthorAndAuthorDateOverrides(t *testing.T) {
+	repository := createRepository(t)
+	runGit(t, repository, nil, "checkout", "-q", "-b", "feature/rewrite-metadata")
+	writeFile(t, filepath.Join(repository, "metadata.txt"), "metadata\n")
+	runGit(t, repository, nil, "add", "metadata.txt")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: original author metadata")
+	original := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	stack, err := service.PrepareCommitEdit(context.Background(), original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorDate := "2026-07-25T13:45:00+09:00"
+	result, err := service.RewriteCommits(context.Background(), RewriteCommitsRequest{
+		Branch: stack.Branch, ExpectedHead: stack.Head, Base: stack.Base,
+		Commits: []RewriteCommit{{
+			Commit:     original,
+			Message:    "feat: rewritten author metadata",
+			Author:     &app.Author{Name: "Rewrite Author", Email: "rewrite.author@example.com"},
+			AuthorDate: &authorDate,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("rewrite commit metadata: %v", err)
+	}
+	if result.Head == original {
+		t.Fatal("rewrite did not create a replacement commit")
+	}
+	metadata := strings.Split(gitOutput(t, repository, "show", "-s", "--format=%an%x00%ae%x00%aI", "HEAD"), "\x00")
+	if len(metadata) != 3 {
+		t.Fatalf("rewritten author metadata = %q", metadata)
+	}
+	if metadata[0] != "Rewrite Author" || metadata[1] != "rewrite.author@example.com" || metadata[2] != authorDate {
+		t.Fatalf("rewritten author metadata = %q, want [%q %q %q]", metadata, "Rewrite Author", "rewrite.author@example.com", authorDate)
+	}
+}
+
+func TestRewriteCommitsRejectsInvalidAuthorAndDateOverridesBeforeMovingBranch(t *testing.T) {
+	repository := createRepository(t)
+	runGit(t, repository, nil, "checkout", "-q", "-b", "feature/rewrite-invalid-metadata")
+	writeFile(t, filepath.Join(repository, "metadata.txt"), "metadata\n")
+	runGit(t, repository, nil, "add", "metadata.txt")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: invalid author metadata target")
+	head := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	stack, err := service.PrepareCommitEdit(context.Background(), head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidDate := "2026-07-25 13:45:00"
+	for _, test := range []struct {
+		name       string
+		author     *app.Author
+		authorDate *string
+		want       string
+	}{
+		{name: "missing author email", author: &app.Author{Name: "Rewrite Author"}, want: "author email is required"},
+		{name: "unsafe author email", author: &app.Author{Name: "Rewrite Author", Email: "rewrite@example.com\nextra"}, want: "single email address"},
+		{name: "ambiguous author email", author: &app.Author{Name: "Rewrite Author", Email: "rewrite@example.com@extra"}, want: "local part and domain"},
+		{name: "invalid author date", authorDate: &invalidDate, want: "ISO 8601"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, rewriteErr := service.RewriteCommits(context.Background(), RewriteCommitsRequest{
+				Branch: stack.Branch, ExpectedHead: stack.Head, Base: stack.Base,
+				Commits: []RewriteCommit{{
+					Commit: head, Message: "feat: invalid author metadata target", Author: test.author, AuthorDate: test.authorDate,
+				}},
+			})
+			if rewriteErr == nil || !strings.Contains(rewriteErr.Error(), test.want) {
+				t.Fatalf("invalid metadata error = %v, want %q", rewriteErr, test.want)
+			}
+			if got := gitOutput(t, repository, "rev-parse", "HEAD"); got != head {
+				t.Fatalf("invalid metadata moved branch to %s, want %s", got, head)
+			}
+		})
+	}
+}
+
+func TestRewriteCommitsAddsPerOperationProvenance(t *testing.T) {
+	repository := createRepository(t)
+	base := gitOutput(t, repository, "rev-parse", "HEAD")
+	runGit(t, repository, nil, "checkout", "-q", "-b", "feature/provenance")
+	writeFile(t, filepath.Join(repository, "first.txt"), "first\n")
+	runGit(t, repository, nil, "add", "first.txt")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: first provenance target")
+	first := gitOutput(t, repository, "rev-parse", "HEAD")
+	writeFile(t, filepath.Join(repository, "second.txt"), "second\n")
+	runGit(t, repository, nil, "add", "second.txt")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: second provenance target")
+	second := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	stack, err := service.PrepareCommitEdit(context.Background(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.RewriteCommits(context.Background(), RewriteCommitsRequest{
+		Branch: stack.Branch, ExpectedHead: stack.Head, Base: stack.Base,
+		AppendRewriteProvenance: true,
+		RewriteProvenanceNote:   "record rewritten history",
+		Commits: []RewriteCommit{
+			{Commit: second, Message: "feat: second provenance target"},
+			{Commit: first, Message: "feat: first provenance target"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("rewrite with provenance: %v", err)
+	}
+	rewritten := strings.Fields(gitOutput(t, repository, "rev-list", "--reverse", base+"..HEAD"))
+	if len(rewritten) != 2 {
+		t.Fatalf("rewritten commits = %v", rewritten)
+	}
+	for index, source := range []string{second, first} {
+		message := gitOutput(t, repository, "show", "-s", "--format=%B", rewritten[index])
+		if strings.Count(message, rewriteProvenanceTrailer) != 1 {
+			t.Fatalf("commit %s provenance count = %d, message = %q", rewritten[index], strings.Count(message, rewriteProvenanceTrailer), message)
+		}
+		want := "rewritten from: " + source + "\n" + rewriteProvenanceNoteTrailer + " record rewritten history"
+		if !strings.HasSuffix(message, want) {
+			t.Fatalf("commit %s provenance = %q, want suffix %q", rewritten[index], message, want)
+		}
+	}
+}
+
+func TestRewriteCommitsReplacesExistingProvenanceTrailer(t *testing.T) {
+	repository := createRepository(t)
+	runGit(t, repository, nil, "checkout", "-q", "-b", "feature/provenance-repeat")
+	writeFile(t, filepath.Join(repository, "trace.txt"), "trace\n")
+	runGit(t, repository, nil, "add", "trace.txt")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: trace rewrite provenance")
+	original := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	stack, err := service.PrepareCommitEdit(context.Background(), original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRewrite, err := service.RewriteCommits(context.Background(), RewriteCommitsRequest{
+		Branch: stack.Branch, ExpectedHead: stack.Head, Base: stack.Base,
+		AppendRewriteProvenance: true,
+		RewriteProvenanceNote:   "first pass",
+		Commits:                 []RewriteCommit{{Commit: original, Message: "feat: trace rewrite provenance"}},
+	})
+	if err != nil {
+		t.Fatalf("first provenance rewrite: %v", err)
+	}
+	secondStack, err := service.PrepareCommitEdit(context.Background(), firstRewrite.Head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.RewriteCommits(context.Background(), RewriteCommitsRequest{
+		Branch: secondStack.Branch, ExpectedHead: secondStack.Head, Base: secondStack.Base,
+		AppendRewriteProvenance: true,
+		RewriteProvenanceNote:   "second pass",
+		Commits:                 []RewriteCommit{{Commit: firstRewrite.Head, Message: secondStack.Commits[0].Message}},
+	})
+	if err != nil {
+		t.Fatalf("second provenance rewrite: %v", err)
+	}
+	message := gitOutput(t, repository, "show", "-s", "--format=%B", "HEAD")
+	if strings.Count(message, rewriteProvenanceTrailer) != 1 {
+		t.Fatalf("provenance trailer count = %d, message = %q", strings.Count(message, rewriteProvenanceTrailer), message)
+	}
+	if strings.Contains(message, rewriteProvenanceTrailer+" "+original) {
+		t.Fatalf("original provenance trailer was retained: %q", message)
+	}
+	if !strings.Contains(message, rewriteProvenanceTrailer+" "+firstRewrite.Head) {
+		t.Fatalf("replacement source trailer missing: %q", message)
+	}
+	if strings.Contains(message, rewriteProvenanceNoteTrailer+" first pass") || !strings.Contains(message, rewriteProvenanceNoteTrailer+" second pass") {
+		t.Fatalf("provenance note was not replaced: %q", message)
+	}
+}
+
+func TestAppendRewriteProvenanceReplacesLegacyTrailer(t *testing.T) {
+	message := "feat: legacy provenance\n\n" + legacyRewriteProvenanceTrailer + " old-source\n" + rewriteProvenanceNoteTrailer + " old note"
+	got := appendRewriteProvenance(message, "new-source", "new note")
+	want := "feat: legacy provenance\n\nrewritten from: new-source\n" + rewriteProvenanceNoteTrailer + " new note"
+	if got != want {
+		t.Fatalf("rewritten provenance = %q, want %q", got, want)
+	}
+}
+
+func TestValidateRewriteProvenanceNote(t *testing.T) {
+	note, err := validateRewriteProvenanceNote(true, "  rewrite for review  ")
+	if err != nil || note != "rewrite for review" {
+		t.Fatalf("normalized note = %q, %v", note, err)
+	}
+	if _, err := validateRewriteProvenanceNote(true, "first line\nsecond line"); err == nil || !strings.Contains(err.Error(), "single line") {
+		t.Fatalf("multiline note error = %v", err)
+	}
+	if _, err := validateRewriteProvenanceNote(true, strings.Repeat("가", maximumRewriteProvenanceNote+1)); err == nil || !strings.Contains(err.Error(), "character limit") {
+		t.Fatalf("Korean character limit error = %v", err)
+	}
+	ignored, err := validateRewriteProvenanceNote(false, "first line\nsecond line")
+	if err != nil || ignored != "" {
+		t.Fatalf("disabled provenance note = %q, %v", ignored, err)
 	}
 }
 
@@ -542,6 +760,109 @@ exec "$TEST_REAL_GIT" "$@"
 	}
 	if got := gitOutput(t, repository, "log", "-1", "--format=%s"); got != "feat: rewritten despite refresh failure" {
 		t.Fatalf("installed commit message = %q", got)
+	}
+}
+
+func TestPrepareCommitEditForBranchRejectsDifferentCheckedOutBranch(t *testing.T) {
+	repository := createRepository(t)
+	head := gitOutput(t, repository, "rev-parse", "HEAD")
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PrepareCommitEditForBranch(context.Background(), head, "feature/rewrite-target"); err == nil || !strings.Contains(err.Error(), "target branch") || !strings.Contains(err.Error(), "main") {
+		t.Fatalf("target branch mismatch error = %v", err)
+	}
+	if _, err := service.PrepareCommitEditForBranch(context.Background(), head, "main"); err != nil {
+		t.Fatalf("prepare expected main branch: %v", err)
+	}
+}
+
+func TestCommitEditTargetForBranchUsesFirstParentEditableHeadRange(t *testing.T) {
+	repository := createRepository(t)
+	runGit(t, repository, nil, "checkout", "-q", "-b", "feature/merged-side")
+	writeFile(t, filepath.Join(repository, "side.txt"), "side\n")
+	runGit(t, repository, nil, "add", "side.txt")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: merged side commit")
+	sideCommit := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	runGit(t, repository, nil, "checkout", "-q", "main")
+	writeFile(t, filepath.Join(repository, "main.txt"), "main\n")
+	runGit(t, repository, nil, "add", "main.txt")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: main before merge")
+	runGit(t, repository, nil, "merge", "--no-ff", "-m", "merge feature/merged-side", "feature/merged-side")
+	mergeCommit := gitOutput(t, repository, "rev-parse", "HEAD")
+	writeFile(t, filepath.Join(repository, "after-merge.txt"), "after merge\n")
+	runGit(t, repository, nil, "add", "after-merge.txt")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: after merge")
+	head := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	target, err := service.CommitEditTargetForBranch(context.Background(), "main")
+	if err != nil {
+		t.Fatalf("read main edit target: %v", err)
+	}
+	if target.Branch != "main" || len(target.Commits) != 1 || target.Commits[0].Commit != head {
+		t.Fatalf("first-parent editable target = %#v", target)
+	}
+	for _, commit := range target.Commits {
+		if commit.Commit == mergeCommit || commit.Commit == sideCommit {
+			t.Fatalf("merge or second-parent commit was exposed as editable: %#v", target.Commits)
+		}
+	}
+	if _, err := service.CommitEditTargetForBranch(context.Background(), "origin/main"); err == nil || !strings.Contains(err.Error(), "not a local branch") {
+		t.Fatalf("remote-only edit target error = %v", err)
+	}
+}
+
+func TestCommitFileContentRestoresDeletedFileFromFirstParent(t *testing.T) {
+	repository := createRepository(t)
+	runGit(t, repository, nil, "checkout", "-q", "-b", "feature/restore-deleted")
+	writeFile(t, filepath.Join(repository, "restore.txt"), "keep this content\n")
+	runGit(t, repository, nil, "add", "restore.txt")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: add restorable file")
+	runGit(t, repository, nil, "rm", "-q", "restore.txt")
+	runGit(t, repository, nil, "commit", "-q", "-m", "feat: delete restorable file")
+	deleted := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	content, err := service.CommitFileContent(context.Background(), deleted, "restore.txt")
+	if err != nil {
+		t.Fatalf("read deleted file: %v", err)
+	}
+	if content.Exists || !content.Editable || !content.Restorable || content.RestoreContent != "keep this content\n" {
+		t.Fatalf("deleted file restore payload = %#v", content)
+	}
+	stack, err := service.PrepareCommitEdit(context.Background(), deleted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.RewriteCommits(context.Background(), RewriteCommitsRequest{
+		Branch: stack.Branch, ExpectedHead: stack.Head, Base: stack.Base,
+		Commits: []RewriteCommit{{
+			Commit:    deleted,
+			Message:   "feat: restore deleted file",
+			FileEdits: []CommitFileEdit{{Path: "restore.txt", Content: content.RestoreContent}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("rewrite deleted file as restore: %v", err)
+	}
+	if result.Head == deleted {
+		t.Fatalf("rewrite did not replace deleted commit")
+	}
+	restored, err := os.ReadFile(filepath.Join(repository, "restore.txt"))
+	if err != nil {
+		t.Fatalf("read restored worktree file: %v", err)
+	}
+	if string(restored) != content.RestoreContent {
+		t.Fatalf("restored file content = %q, want %q", restored, content.RestoreContent)
 	}
 }
 

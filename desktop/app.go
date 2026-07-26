@@ -292,8 +292,12 @@ func (a *DesktopApp) CommitDetail(commit, file string) (desktopcore.CommitDetail
 	return a.service.CommitDetail(a.appContext(), commit, file)
 }
 
-func (a *DesktopApp) PrepareCommitEdit(commit string) (desktopcore.CommitEditStack, error) {
-	return a.service.PrepareCommitEdit(a.appContext(), commit)
+func (a *DesktopApp) PrepareCommitEdit(commit, expectedBranch string) (desktopcore.CommitEditStack, error) {
+	return a.service.PrepareCommitEditForBranch(a.appContext(), commit, expectedBranch)
+}
+
+func (a *DesktopApp) CommitEditTarget(branch string) (desktopcore.CommitEditTarget, error) {
+	return a.service.CommitEditTargetForBranch(a.appContext(), branch)
 }
 
 func (a *DesktopApp) CommitFileContent(commit, file string) (desktopcore.CommitFileContent, error) {

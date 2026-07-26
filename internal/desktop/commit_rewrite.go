@@ -9,14 +9,22 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yunsang/gitgit/internal/app"
 	"github.com/yunsang/gitgit/internal/gitexec"
 )
 
 const (
-	maximumRewriteCommits = 100
-	maximumEditableFile   = 2 << 20
+	maximumRewriteCommits        = 100
+	maximumEditableFile          = 2 << 20
+	maximumRewriteProvenanceNote = 500
+	maximumRewriteAuthorName     = 256
+	maximumRewriteAuthorEmail    = 320
+
+	rewriteProvenanceTrailer       = "rewritten from:"
+	legacyRewriteProvenanceTrailer = "GitGit-Rewritten-From:"
+	rewriteProvenanceNoteTrailer   = "GitGit-Rewrite-Note:"
 )
 
 type CommitEditStack struct {
@@ -26,6 +34,14 @@ type CommitEditStack struct {
 	Base                string             `json:"base"`
 	DefaultBranchTarget bool               `json:"default_branch_target"`
 	Commits             []CommitEditCommit `json:"commits"`
+}
+
+// CommitEditTarget is the safe, first-parent-only head range that the Commit
+// Page may expose for local editing. It intentionally stops before a merge or
+// root commit because RewriteCommits cannot replay across either boundary.
+type CommitEditTarget struct {
+	Branch  string          `json:"branch"`
+	Commits []CommitSummary `json:"commits"`
 }
 
 type CommitEditCommit struct {
@@ -39,12 +55,14 @@ type CommitEditCommit struct {
 }
 
 type CommitFileContent struct {
-	Commit   string `json:"commit"`
-	Path     string `json:"path"`
-	Content  string `json:"content"`
-	Exists   bool   `json:"exists"`
-	Editable bool   `json:"editable"`
-	Reason   string `json:"reason,omitempty"`
+	Commit         string `json:"commit"`
+	Path           string `json:"path"`
+	Content        string `json:"content"`
+	Exists         bool   `json:"exists"`
+	Editable       bool   `json:"editable"`
+	Restorable     bool   `json:"restorable"`
+	RestoreContent string `json:"restore_content,omitempty"`
+	Reason         string `json:"reason,omitempty"`
 }
 
 type CommitFileEdit struct {
@@ -54,17 +72,21 @@ type CommitFileEdit struct {
 }
 
 type RewriteCommit struct {
-	Commit    string           `json:"commit"`
-	Message   string           `json:"message"`
-	FileEdits []CommitFileEdit `json:"file_edits,omitempty"`
+	Commit     string           `json:"commit"`
+	Message    string           `json:"message"`
+	Author     *app.Author      `json:"author,omitempty"`
+	AuthorDate *string          `json:"author_date,omitempty"`
+	FileEdits  []CommitFileEdit `json:"file_edits,omitempty"`
 }
 
 type RewriteCommitsRequest struct {
-	Branch               string          `json:"branch"`
-	ExpectedHead         string          `json:"expected_head"`
-	Base                 string          `json:"base"`
-	ConfirmDefaultBranch bool            `json:"confirm_default_branch"`
-	Commits              []RewriteCommit `json:"commits"`
+	Branch                  string          `json:"branch"`
+	ExpectedHead            string          `json:"expected_head"`
+	Base                    string          `json:"base"`
+	ConfirmDefaultBranch    bool            `json:"confirm_default_branch"`
+	AppendRewriteProvenance bool            `json:"append_rewrite_provenance"`
+	RewriteProvenanceNote   string          `json:"rewrite_provenance_note"`
+	Commits                 []RewriteCommit `json:"commits"`
 }
 
 type RewriteCommitsResponse struct {
@@ -75,22 +97,83 @@ type RewriteCommitsResponse struct {
 }
 
 func (s *Service) PrepareCommitEdit(ctx context.Context, startOID string) (CommitEditStack, error) {
+	return s.prepareCommitEdit(ctx, startOID, "")
+}
+
+// CommitEditTargetForBranch reads the editable first-parent head range without
+// changing the active worktree. Callers still need the target branch checked
+// out before they can prepare or apply a rewrite.
+func (s *Service) CommitEditTargetForBranch(ctx context.Context, branch string) (CommitEditTarget, error) {
+	operationContext, finish := s.beginOperation(ctx)
+	defer finish()
+	repository, err := s.currentRepository()
+	if err != nil {
+		return CommitEditTarget{}, err
+	}
+	return commitEditTargetForBranch(operationContext, repository, branch)
+}
+
+func commitEditTargetForBranch(ctx context.Context, repository *gitexec.Repository, branch string) (CommitEditTarget, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return CommitEditTarget{}, errors.New("select a local branch to edit")
+	}
+	if _, err := repository.Run(ctx, nil, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+		return CommitEditTarget{}, fmt.Errorf("the target branch %q is not a local branch; open a local worktree for it before editing", branch)
+	}
+	output, err := repository.Run(ctx, nil,
+		"rev-list", "--first-parent", fmt.Sprintf("--max-count=%d", maximumRewriteCommits), "--end-of-options", branch,
+	)
+	if err != nil {
+		return CommitEditTarget{}, fmt.Errorf("read first-parent history for %s: %w", branch, err)
+	}
+	target := CommitEditTarget{Branch: branch, Commits: make([]CommitSummary, 0, maximumRewriteCommits)}
+	for _, oid := range strings.Fields(string(output)) {
+		summary, summaryErr := readCommitSummary(ctx, repository, oid)
+		if summaryErr != nil {
+			return CommitEditTarget{}, summaryErr
+		}
+		if len(summary.Parents) == 0 {
+			break
+		}
+		if len(summary.Parents) > 1 {
+			break
+		}
+		target.Commits = append(target.Commits, summary)
+	}
+	if len(target.Commits) == 0 {
+		return CommitEditTarget{}, fmt.Errorf("the editable first-parent head range of %q is empty; GitGit cannot rewrite a merge or root commit", branch)
+	}
+	return target, nil
+}
+
+// PrepareCommitEditForBranch keeps the UI's displayed branch and the branch
+// that will be rewritten on the same lease. The repository is never checked
+// out here; callers must select the attached worktree before starting.
+func (s *Service) PrepareCommitEditForBranch(ctx context.Context, startOID, expectedBranch string) (CommitEditStack, error) {
+	return s.prepareCommitEdit(ctx, startOID, expectedBranch)
+}
+
+func (s *Service) prepareCommitEdit(ctx context.Context, startOID, expectedBranch string) (CommitEditStack, error) {
 	operationContext, finish := s.beginOperation(ctx)
 	defer finish()
 	repository, err := s.currentRepository()
 	if err != nil {
 		return CommitEditStack{}, err
 	}
-	return prepareCommitEdit(operationContext, repository, strings.TrimSpace(startOID))
+	return prepareCommitEdit(operationContext, repository, strings.TrimSpace(startOID), strings.TrimSpace(expectedBranch))
 }
 
-func prepareCommitEdit(ctx context.Context, repository *gitexec.Repository, startOID string) (CommitEditStack, error) {
+func prepareCommitEdit(ctx context.Context, repository *gitexec.Repository, startOID, expectedBranch string) (CommitEditStack, error) {
 	if startOID == "" {
 		return CommitEditStack{}, errors.New("select a commit to start editing")
 	}
 	branch, err := currentLocalBranch(ctx, repository)
 	if err != nil {
 		return CommitEditStack{}, err
+	}
+	if expectedBranch != "" && expectedBranch != branch {
+		return CommitEditStack{}, fmt.Errorf("the target branch is %q, but this worktree has %q checked out; select that branch's worktree before entering Edit Mode", expectedBranch, branch)
 	}
 	head, err := resolveCommit(ctx, repository, "HEAD")
 	if err != nil {
@@ -197,34 +280,35 @@ func (s *Service) CommitFileContent(ctx context.Context, oid, filePath string) (
 		return response, nil
 	}
 	if !exists {
-		response.Reason = "The file is deleted by this commit. Uncheck Delete to recreate it."
+		if len(summary.Parents) == 0 {
+			response.Reason = "The file is deleted by this commit and has no parent version to restore."
+			return response, nil
+		}
+		restoredContent, restorable, restoreReason, readErr := readEditableCommitFileContent(operationContext, repository, summary.Parents[0], path)
+		if readErr != nil {
+			return CommitFileContent{}, readErr
+		}
+		response.Restorable = restorable
+		response.RestoreContent = restoredContent
+		if restorable {
+			response.Reason = "The file is deleted by this commit. Restore file brings back its first-parent content."
+		} else if restoreReason != "" {
+			response.Editable = false
+			response.Reason = restoreReason
+		} else {
+			response.Editable = false
+			response.Reason = "The file is deleted by this commit and has no first-parent content to restore."
+		}
 		return response, nil
 	}
-	object := resolvedOID + ":" + path
-	sizeOutput, err := repository.Run(operationContext, nil, "cat-file", "-s", object)
-	if err != nil {
-		return CommitFileContent{}, fmt.Errorf("read file size: %w", err)
-	}
-	var size int64
-	if _, err := fmt.Sscan(strings.TrimSpace(string(sizeOutput)), &size); err != nil {
-		return CommitFileContent{}, fmt.Errorf("parse file size: %w", err)
-	}
-	if size > maximumEditableFile {
-		response.Editable = false
-		response.Reason = "Files larger than 2 MiB are not editable in GitGit."
-		return response, nil
-	}
-	content, err := repository.Run(operationContext, nil, "show", object)
-	if err != nil {
-		return CommitFileContent{}, fmt.Errorf("read file content: %w", err)
+	content, editable, reason, readErr := readEditableCommitFileContent(operationContext, repository, resolvedOID, path)
+	if readErr != nil {
+		return CommitFileContent{}, readErr
 	}
 	response.Exists = true
-	if bytes.IndexByte(content, 0) >= 0 {
-		response.Editable = false
-		response.Reason = "Binary files are not editable in GitGit."
-		return response, nil
-	}
-	response.Content = string(content)
+	response.Editable = editable
+	response.Reason = reason
+	response.Content = content
 	return response, nil
 }
 
@@ -267,6 +351,10 @@ func (s *Service) rewriteCommits(ctx context.Context, repository *gitexec.Reposi
 	if err != nil {
 		return RewriteCommitsResponse{}, err
 	}
+	provenanceNote, err := validateRewriteProvenanceNote(request.AppendRewriteProvenance, request.RewriteProvenanceNote)
+	if err != nil {
+		return RewriteCommitsResponse{}, err
+	}
 	committerName, committerEmail, err := readCommitterIdentity(ctx, repository)
 	if err != nil {
 		return RewriteCommitsResponse{}, err
@@ -303,6 +391,10 @@ func (s *Service) rewriteCommits(ctx context.Context, repository *gitexec.Reposi
 	temporaryRepository := &gitexec.Repository{Root: temporaryRoot, CommonDir: repository.CommonDir, Runner: repository.Runner}
 	for _, planned := range request.Commits {
 		summary := summaries[planned.Commit]
+		author, authorDate, err := rewriteCommitAuthorAndDate(summary, planned)
+		if err != nil {
+			return RewriteCommitsResponse{}, fmt.Errorf("validate replacement metadata for %s: %w", summary.ShortCommit, err)
+		}
 		if _, err := temporaryRepository.Run(ctx, nil, "cherry-pick", "--no-commit", planned.Commit); err != nil {
 			return RewriteCommitsResponse{}, fmt.Errorf("apply %s in its new position: %w", summary.ShortCommit, err)
 		}
@@ -310,13 +402,17 @@ func (s *Service) rewriteCommits(ctx context.Context, repository *gitexec.Reposi
 			return RewriteCommitsResponse{}, err
 		}
 		environment := []string{
-			"GIT_AUTHOR_NAME=" + summary.Author.Name,
-			"GIT_AUTHOR_EMAIL=" + summary.Author.Email,
-			"GIT_AUTHOR_DATE=" + summary.Date,
+			"GIT_AUTHOR_NAME=" + author.Name,
+			"GIT_AUTHOR_EMAIL=" + author.Email,
+			"GIT_AUTHOR_DATE=" + authorDate,
 			"GIT_COMMITTER_NAME=" + committerName,
 			"GIT_COMMITTER_EMAIL=" + committerEmail,
 		}
-		if _, err := temporaryRepository.Runner.RunWithEnv(ctx, temporaryRoot, strings.NewReader(planned.Message), environment,
+		message := planned.Message
+		if request.AppendRewriteProvenance {
+			message = appendRewriteProvenance(message, summary.Commit, provenanceNote)
+		}
+		if _, err := temporaryRepository.Runner.RunWithEnv(ctx, temporaryRoot, strings.NewReader(message), environment,
 			"commit", "--quiet", "--allow-empty", "--no-gpg-sign", "--file=-"); err != nil {
 			return RewriteCommitsResponse{}, fmt.Errorf("create replacement for %s: %w", summary.ShortCommit, err)
 		}
@@ -430,10 +526,117 @@ func validateRewriteRange(ctx context.Context, repository *gitexec.Repository, b
 		if strings.TrimSpace(commit.Message) == "" {
 			return nil, fmt.Errorf("commit %s has an empty message", shortOID(oid))
 		}
+		if _, _, err := rewriteCommitAuthorAndDate(summaries[oid], commit); err != nil {
+			return nil, fmt.Errorf("commit %s has invalid replacement metadata: %w", shortOID(oid), err)
+		}
 		seen[oid] = true
 		summaries[commit.Commit] = summaries[oid]
 	}
 	return summaries, nil
+}
+
+func rewriteCommitAuthorAndDate(summary CommitEditCommit, planned RewriteCommit) (app.Author, string, error) {
+	author := summary.Author
+	if planned.Author != nil {
+		name := strings.TrimSpace(planned.Author.Name)
+		email := strings.TrimSpace(planned.Author.Email)
+		if err := validateRewriteAuthor(name, email); err != nil {
+			return app.Author{}, "", err
+		}
+		author = app.Author{Name: name, Email: email}
+	}
+
+	authorDate := summary.Date
+	if planned.AuthorDate != nil {
+		candidate := strings.TrimSpace(*planned.AuthorDate)
+		if err := validateRewriteAuthorDate(candidate); err != nil {
+			return app.Author{}, "", err
+		}
+		authorDate = candidate
+	}
+	return author, authorDate, nil
+}
+
+func validateRewriteAuthor(name, email string) error {
+	if name == "" {
+		return errors.New("author name is required")
+	}
+	if utf8.RuneCountInString(name) > maximumRewriteAuthorName {
+		return fmt.Errorf("author name exceeds the %d character limit", maximumRewriteAuthorName)
+	}
+	if strings.ContainsAny(name, "\x00\r\n") {
+		return errors.New("author name contains an invalid control character")
+	}
+	if email == "" {
+		return errors.New("author email is required")
+	}
+	if utf8.RuneCountInString(email) > maximumRewriteAuthorEmail {
+		return fmt.Errorf("author email exceeds the %d character limit", maximumRewriteAuthorEmail)
+	}
+	if strings.ContainsAny(email, "\x00\r\n") || strings.ContainsAny(email, "<>\t ") {
+		return errors.New("author email must be a single email address")
+	}
+	if strings.Count(email, "@") != 1 || strings.HasPrefix(email, "@") || strings.HasSuffix(email, "@") {
+		return errors.New("author email must include a local part and domain")
+	}
+	return nil
+}
+
+func validateRewriteAuthorDate(value string) error {
+	if value == "" {
+		return errors.New("author date is required")
+	}
+	if strings.ContainsAny(value, "\x00\r\n") {
+		return errors.New("author date contains an invalid control character")
+	}
+	if _, err := time.Parse(time.RFC3339, value); err != nil {
+		return errors.New("author date must use ISO 8601 with a timezone")
+	}
+	return nil
+}
+
+func validateRewriteProvenanceNote(enabled bool, note string) (string, error) {
+	if !enabled {
+		return "", nil
+	}
+	note = strings.TrimSpace(note)
+	if utf8.RuneCountInString(note) > maximumRewriteProvenanceNote {
+		return "", fmt.Errorf("rewrite provenance note exceeds the %d character limit", maximumRewriteProvenanceNote)
+	}
+	if strings.ContainsAny(note, "\r\n") {
+		return "", errors.New("rewrite provenance note must be a single line")
+	}
+	return note, nil
+}
+
+func appendRewriteProvenance(message, sourceOID, note string) string {
+	message = stripTrailingRewriteProvenance(message)
+	trailers := []string{rewriteProvenanceTrailer + " " + sourceOID}
+	if note != "" {
+		trailers = append(trailers, rewriteProvenanceNoteTrailer+" "+note)
+	}
+	return message + "\n\n" + strings.Join(trailers, "\n")
+}
+
+func stripTrailingRewriteProvenance(message string) string {
+	lines := strings.Split(strings.ReplaceAll(message, "\r\n", "\n"), "\n")
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	for end > 0 && isRewriteProvenanceTrailer(lines[end-1]) {
+		end--
+	}
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	return strings.Join(lines[:end], "\n")
+}
+
+func isRewriteProvenanceTrailer(line string) bool {
+	return strings.HasPrefix(line, rewriteProvenanceTrailer+" ") ||
+		strings.HasPrefix(line, legacyRewriteProvenanceTrailer+" ") ||
+		strings.HasPrefix(line, rewriteProvenanceNoteTrailer+" ")
 }
 
 func applyCommitFileEdits(ctx context.Context, repository *gitexec.Repository, summary CommitEditCommit, edits []CommitFileEdit) error {
@@ -510,6 +713,39 @@ func editableCommitFileMode(ctx context.Context, repository *gitexec.Repository,
 		return "", false, nil
 	}
 	return mode, false, nil
+}
+
+func readEditableCommitFileContent(ctx context.Context, repository *gitexec.Repository, commit, path string) (string, bool, string, error) {
+	mode, exists, err := treeFileMode(ctx, repository, commit, path)
+	if err != nil {
+		return "", false, "", err
+	}
+	if !exists {
+		return "", false, "", nil
+	}
+	if !isRegularGitFileMode(mode) {
+		return "", false, nonRegularFileReason(mode), nil
+	}
+	object := commit + ":" + path
+	sizeOutput, err := repository.Run(ctx, nil, "cat-file", "-s", object)
+	if err != nil {
+		return "", false, "", fmt.Errorf("read file size: %w", err)
+	}
+	var size int64
+	if _, err := fmt.Sscan(strings.TrimSpace(string(sizeOutput)), &size); err != nil {
+		return "", false, "", fmt.Errorf("parse file size: %w", err)
+	}
+	if size > maximumEditableFile {
+		return "", false, "Files larger than 2 MiB are not editable in GitGit.", nil
+	}
+	content, err := repository.Run(ctx, nil, "show", object)
+	if err != nil {
+		return "", false, "", fmt.Errorf("read file content: %w", err)
+	}
+	if bytes.IndexByte(content, 0) >= 0 {
+		return "", false, "Binary files are not editable in GitGit.", nil
+	}
+	return string(content), true, "", nil
 }
 
 func treeFileMode(ctx context.Context, repository *gitexec.Repository, treeish, path string) (string, bool, error) {

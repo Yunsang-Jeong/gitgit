@@ -230,13 +230,26 @@ export interface CommitEditStack {
   commits: CommitEditCommit[]
 }
 
+export interface CommitEditTarget {
+  branch: string
+  commits: CommitSummary[]
+}
+
 export interface CommitFileContent {
   commit: string
   path: string
   content: string
   exists: boolean
   editable: boolean
+  restorable: boolean
+  restore_content?: string
   reason?: string
+}
+
+export interface CommitFileDraft extends CommitFileContent {
+  original_content: string
+  original_delete: boolean
+  dirty: boolean
 }
 
 export interface CommitFileEdit {
@@ -248,6 +261,8 @@ export interface CommitFileEdit {
 export interface RewriteCommit {
   commit: string
   message: string
+  author?: Author
+  author_date?: string
   file_edits?: CommitFileEdit[]
 }
 
@@ -256,6 +271,8 @@ export interface RewriteCommitsRequest {
   expected_head: string
   base: string
   confirm_default_branch: boolean
+  append_rewrite_provenance: boolean
+  rewrite_provenance_note: string
   commits: RewriteCommit[]
 }
 

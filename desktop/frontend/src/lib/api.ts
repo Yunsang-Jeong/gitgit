@@ -1,4 +1,4 @@
-import type { CommitDetail, CommitEditStack, CommitFileContent, HistoryBranchesResponse, HistoryRequest, HistoryResponse, ProjectDiscoveryResult, ProjectPruneResult, RegisteredProject, RemoteSyncResult, RepositoryState, RepositoryTreeResponse, RewriteCommitsRequest, RewriteCommitsResponse, SearchProgress, SearchRequest, SearchResponse } from './types'
+import type { CommitDetail, CommitEditStack, CommitEditTarget, CommitFileContent, HistoryBranchesResponse, HistoryRequest, HistoryResponse, ProjectDiscoveryResult, ProjectPruneResult, RegisteredProject, RemoteSyncResult, RepositoryState, RepositoryTreeResponse, RewriteCommitsRequest, RewriteCommitsResponse, SearchProgress, SearchRequest, SearchResponse } from './types'
 
 type Backend = {
   Version: () => Promise<string>
@@ -17,7 +17,8 @@ type Backend = {
   History: (request: HistoryRequest) => Promise<HistoryResponse>
   HistoryBranches: (commits: string[]) => Promise<HistoryBranchesResponse>
   CommitDetail: (commit: string, file: string) => Promise<CommitDetail>
-  PrepareCommitEdit: (commit: string) => Promise<CommitEditStack>
+  PrepareCommitEdit: (commit: string, expectedBranch: string) => Promise<CommitEditStack>
+  CommitEditTarget: (branch: string) => Promise<CommitEditTarget>
   CommitFileContent: (commit: string, file: string) => Promise<CommitFileContent>
   RewriteCommits: (request: RewriteCommitsRequest) => Promise<RewriteCommitsResponse>
   RepositoryTree: (revision: string, directory: string) => Promise<RepositoryTreeResponse>
@@ -73,7 +74,8 @@ export const api = {
   history: (request: HistoryRequest) => backend().History(request),
   historyBranches: (commits: string[]) => backend().HistoryBranches(commits),
   commitDetail: (commit: string, file = '') => backend().CommitDetail(commit, file),
-  prepareCommitEdit: (commit: string) => backend().PrepareCommitEdit(commit),
+  prepareCommitEdit: (commit: string, expectedBranch: string) => backend().PrepareCommitEdit(commit, expectedBranch),
+  commitEditTarget: (branch: string) => backend().CommitEditTarget(branch),
   commitFileContent: (commit: string, file: string) => backend().CommitFileContent(commit, file),
   rewriteCommits: (request: RewriteCommitsRequest) => backend().RewriteCommits(request),
   repositoryTree: (revision: string, directory = '') => backend().RepositoryTree(revision, directory),

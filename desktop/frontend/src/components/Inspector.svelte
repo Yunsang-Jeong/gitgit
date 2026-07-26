@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import ContextMenu from './ContextMenu.svelte'
   import RepositoryTree from './RepositoryTree.svelte'
   import { addedAndDeletedLines, buildChangedFileTree, type ChangedFileTreeNode } from '../lib/changed-files'
   import { formatDate } from '../lib/datetime'
   import { buildReviewLink } from '../lib/review-links'
   import { inspectorRefContext } from '../lib/remotes'
-  import type { ChangedFilesView, CommitDetail, ContextMenuItem, FileChange, RemoteInfo, RepositoryTreeResponse, SearchResult } from '../lib/types'
+  import type { Author, ChangedFilesView, CommitDetail, ContextMenuItem, FileChange, RemoteInfo, RepositoryTreeResponse, SearchResult } from '../lib/types'
 
   export let selected: CommitDetail | SearchResult | null
   export let fileRevision: string
@@ -15,6 +15,25 @@
   export let remotes: RemoteInfo[] = []
   export let defaultBranch = ''
   export let upstream = ''
+  export let editMode = false
+  export let editDraftMessage: string | null = null
+  export let editDraftAuthor: Author | null = null
+  export let editDraftDate: string | null = null
+  export let editDraftLocked = false
+  export let willChange = false
+  export let onEditMessage: (message: string) => void = () => undefined
+  export let onEditAuthor: (author: Author) => void = () => undefined
+  export let onEditDate: (date: string) => void = () => undefined
+  export let canEditCommits = false
+  export let editDisabledReason = ''
+  export let editModeActionDisabled = false
+  export let onEnterEditMode: () => void = () => undefined
+  export let onExitEditMode: () => void = () => undefined
+  export let showWorktreeActions = false
+  export let worktreeActionsDisabled = false
+  export let onOpenCurrentWorktree: () => void = () => undefined
+  export let onOpenCurrentWorktreeInTerminal: () => void = () => undefined
+  export let onOpenCurrentWorktreeInIDE: () => void = () => undefined
   export let onOpenFinder: (path: string) => void
   export let onOpenTerminal: (path: string) => void
   export let onOpenExternalURL: (url: string) => void
@@ -30,6 +49,13 @@
   let changedFilesView = defaultChangedFilesView
   let observedDefaultChangedFilesView = defaultChangedFilesView
   let observedCommit = selected?.commit ?? ''
+  let observedEditMode = editMode
+  let messageEditing = false
+  let authorEditing = false
+  let dateEditing = false
+  let commitMessageEditor: HTMLTextAreaElement | undefined
+  let authorNameEditor: HTMLInputElement | undefined
+  let dateEditor: HTMLInputElement | undefined
   let collapsedDirectories = new Set<string>()
   let diffFile: FileChange | null = null
   let selectedFileDetail: CommitDetail | SearchResult | null = null
@@ -40,13 +66,18 @@
   let copyToastTimer: ReturnType<typeof setTimeout> | undefined
   let contextMenu: { x: number; y: number; label: string; items: ContextMenuItem[]; targetPath: string } | null = null
 
+  const commitMessageEditorMinHeight = 25
+  const commitMessageEditorMaxHeight = 180
+
   $: changedFileTree = buildChangedFileTree(selected?.files ?? [])
   $: selectedParents = selected && 'parents' in selected ? selected.parents : []
   $: selectedRefContext = inspectorRefContext(selected?.refs, containingBranches(selected), defaultBranch, historicalBranch(selected))
   $: matchedSearchFiles = selected && 'matched_files' in selected ? selected.matched_files ?? [] : []
   $: isMergeCommit = selectedParents.length > 1
   $: reviewLink = selected ? buildReviewLink(selected.message, selectedParents, remotes, upstream) : null
-  $: visibleChangedNodes = flattenChangedFileTree(changedFileTree)
+  $: displayedAuthor = editMode && editDraftAuthor !== null ? editDraftAuthor : selected?.author ?? null
+  $: displayedDate = editMode && editDraftDate !== null ? editDraftDate : selected?.date ?? ''
+  $: visibleChangedNodes = flattenChangedFileTree(changedFileTree, collapsedDirectories)
   $: selectedFileDiff = diffFile && selectedFileDetail?.file.path === diffFile.path
     ? selectedFileDetail.diff
     : diffFile && selected?.file.path === diffFile.path
@@ -62,7 +93,16 @@
     observedCommit = selected?.commit ?? ''
     collapsedDirectories = new Set<string>()
     selectedFileDetail = null
+    messageEditing = false
+    authorEditing = false
+    dateEditing = false
     closeDiffPopover()
+  }
+  $: if (editMode !== observedEditMode) {
+    observedEditMode = editMode
+    messageEditing = false
+    authorEditing = false
+    dateEditing = false
   }
 
   function title(message: string): string {
@@ -85,12 +125,12 @@
     return matchedSearchFiles.some((matched) => matched.path === file.path && (matched.old_path ?? '') === (file.old_path ?? ''))
   }
 
-  function flattenChangedFileTree(nodes: ChangedFileTreeNode[], depth = 0): VisibleChangedNode[] {
+  function flattenChangedFileTree(nodes: ChangedFileTreeNode[], collapsed: Set<string>, depth = 0): VisibleChangedNode[] {
     const visible: VisibleChangedNode[] = []
     for (const node of nodes) {
       visible.push({ node, depth })
-      if (node.kind === 'directory' && !collapsedDirectories.has(node.path)) {
-        visible.push(...flattenChangedFileTree(node.children, depth + 1))
+      if (node.kind === 'directory' && !collapsed.has(node.path)) {
+        visible.push(...flattenChangedFileTree(node.children, collapsed, depth + 1))
       }
     }
     return visible
@@ -124,6 +164,68 @@
       copyToast = `Failed to copy · ${label}`
     }
     copyToastTimer = setTimeout(() => (copyToast = ''), 1800)
+  }
+
+  async function beginCommitMessageEdit(): Promise<void> {
+    if (!editMode || editDraftLocked || editDraftMessage === null) return
+    messageEditing = true
+    await tick()
+    resizeCommitMessageEditor(commitMessageEditor)
+    commitMessageEditor?.focus()
+    commitMessageEditor?.setSelectionRange(commitMessageEditor.value.length, commitMessageEditor.value.length)
+  }
+
+  function editCommitMessage(event: Event): void {
+    const editor = event.currentTarget as HTMLTextAreaElement
+    onEditMessage(editor.value)
+    resizeCommitMessageEditor(editor)
+  }
+
+  function resizeCommitMessageEditor(editor: HTMLTextAreaElement | undefined): void {
+    if (!editor) return
+    editor.style.height = 'auto'
+    const nextHeight = Math.min(
+      Math.max(editor.scrollHeight, commitMessageEditorMinHeight),
+      commitMessageEditorMaxHeight,
+    )
+    editor.style.height = `${nextHeight}px`
+  }
+
+  function autoResizeCommitMessageEditor(editor: HTMLTextAreaElement, _message: string): { update: (_nextMessage: string) => void } {
+    resizeCommitMessageEditor(editor)
+    return {
+      update: () => resizeCommitMessageEditor(editor),
+    }
+  }
+
+  async function beginAuthorEdit(): Promise<void> {
+    if (!editMode || editDraftLocked || editDraftAuthor === null) return
+    authorEditing = true
+    await tick()
+    authorNameEditor?.focus()
+    authorNameEditor?.select()
+  }
+
+  function editAuthorName(event: Event): void {
+    if (editDraftAuthor === null) return
+    onEditAuthor({ ...editDraftAuthor, name: (event.currentTarget as HTMLInputElement).value })
+  }
+
+  function editAuthorEmail(event: Event): void {
+    if (editDraftAuthor === null) return
+    onEditAuthor({ ...editDraftAuthor, email: (event.currentTarget as HTMLInputElement).value })
+  }
+
+  async function beginDateEdit(): Promise<void> {
+    if (!editMode || editDraftLocked || editDraftDate === null) return
+    dateEditing = true
+    await tick()
+    dateEditor?.focus()
+    dateEditor?.select()
+  }
+
+  function editDate(event: Event): void {
+    onEditDate((event.currentTarget as HTMLInputElement).value)
   }
 
   async function openDiffPopover(event: MouseEvent, file: FileChange): Promise<void> {
@@ -188,6 +290,24 @@
 <svelte:window on:keydown={handleWindowKeydown} on:mousedown={() => closeDiffPopover()} on:resize={() => closeDiffPopover()} />
 
 <aside class="inspector pane">
+  {#if showWorktreeActions}
+    <div class="inspector-worktree-toolbar" aria-label="Commit and worktree actions">
+      <div class="inspector-worktree-actions">
+        <button
+          class:edit-mode-active={editMode}
+          class="inspector-worktree-action inspector-edit-mode-action"
+          type="button"
+          aria-pressed={editMode}
+          on:click={editMode ? onExitEditMode : onEnterEditMode}
+          disabled={editModeActionDisabled || (!editMode && !canEditCommits)}
+          title={editMode ? 'Exit Edit Mode and discard this local reorder draft' : editDisabledReason || 'Enter Edit Mode for the visible history'}
+        ><span aria-hidden="true">✎</span><span>{editMode ? 'Exit Edit Mode' : 'Edit Mode'}</span></button>
+        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktree} disabled={worktreeActionsDisabled} title="Open the current worktree in Finder" aria-label="Open current worktree in Finder"><span aria-hidden="true">▱</span><span>Open Finder</span></button>
+        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktreeInTerminal} disabled={worktreeActionsDisabled} title="Open the current worktree in Terminal" aria-label="Open current worktree in Terminal"><span aria-hidden="true">⌘</span><span>Open Terminal</span></button>
+        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktreeInIDE} disabled={worktreeActionsDisabled} title="Open the current worktree in the configured IDE" aria-label="Open current worktree in IDE"><span aria-hidden="true">↗</span><span>Open IDE</span></button>
+      </div>
+    </div>
+  {/if}
   <div class="pane-title inspector-pane-title">
     <span>Inspector</span>
     <div class="inspector-tabs" role="tablist" aria-label="Inspector views">
@@ -227,17 +347,63 @@
   {:else}
     <section class="commit-summary">
       <div class="commit-summary-heading">
-        <button class="copy-layer copy-heading" type="button" title="Copy commit message" on:click={() => void copyLayer(selected.message, 'Commit message')}>
-          <h2 class="copy-target">{title(selected.message)}</h2>
-        </button>
+        {#if editMode && editDraftMessage !== null}
+          {#if messageEditing}
+            <textarea
+              bind:this={commitMessageEditor}
+              class="commit-message-editor"
+              rows="1"
+              aria-label="Edit commit message"
+              value={editDraftMessage}
+              use:autoResizeCommitMessageEditor={editDraftMessage}
+              on:input={editCommitMessage}
+              on:keydown|stopPropagation
+              disabled={editDraftLocked}
+            ></textarea>
+          {:else}
+            <button class="copy-layer copy-heading commit-message-edit-trigger" type="button" title="Edit commit message" on:click={() => void beginCommitMessageEdit()} disabled={editDraftLocked}>
+              <h2 class="copy-target">{title(editDraftMessage)}</h2>
+            </button>
+          {/if}
+        {:else}
+          <button class="copy-layer copy-heading" type="button" title="Copy commit message" on:click={() => void copyLayer(selected.message, 'Commit message')}>
+            <h2 class="copy-target">{title(selected.message)}</h2>
+          </button>
+        {/if}
         {#if isMergeCommit}<span class="merge-commit-badge">Merge</span>{/if}
       </div>
-      <button class="copy-layer sha-line" type="button" title="Copy commit hash" on:click={() => void copyLayer(selected.commit, 'Commit hash')}><code class="copy-target">{selected.commit}</code></button>
+      <button class="copy-layer sha-line" type="button" title="Copy commit hash" on:click={() => void copyLayer(selected.commit, 'Commit hash')}>
+        <code class="copy-target">{selected.commit}</code>
+        {#if editMode && willChange}<span class="commit-rewrite-status">→ will be changed</span>{/if}
+      </button>
       <dl>
         <dt>Author</dt>
-        <dd class="inspector-author"><span>{selected.author.name}</span>{#if selected.author.email}<small>&lt;{selected.author.email}&gt;</small>{/if}</dd>
+        <dd class="inspector-author">
+          {#if editMode && editDraftAuthor !== null}
+            {#if authorEditing}
+              <div class="commit-metadata-editor author-metadata-editor">
+                <input bind:this={authorNameEditor} class="commit-metadata-editor-input" type="text" aria-label="Edit author name" value={editDraftAuthor.name} on:input={editAuthorName} on:keydown|stopPropagation disabled={editDraftLocked}>
+                <input class="commit-metadata-editor-input" type="email" aria-label="Edit author email" value={editDraftAuthor.email} on:input={editAuthorEmail} on:keydown|stopPropagation disabled={editDraftLocked}>
+              </div>
+            {:else}
+              <button class="copy-layer commit-metadata-edit-trigger" type="button" title="Edit author" on:click={() => void beginAuthorEdit()} disabled={editDraftLocked}><span class="copy-target">{displayedAuthor?.name}</span>{#if displayedAuthor?.email}<small>&lt;{displayedAuthor.email}&gt;</small>{/if}</button>
+            {/if}
+          {:else}
+            <span>{selected.author.name}</span>{#if selected.author.email}<small>&lt;{selected.author.email}&gt;</small>{/if}
+          {/if}
+        </dd>
         <dt>Date</dt>
-        <dd><button class="copy-layer metadata-copy" type="button" title="Copy date" on:click={() => void copyLayer(formatDate(selected.date, true), 'Date')}><span class="copy-target">{formatDate(selected.date, true)}</span></button></dd>
+        <dd>
+          {#if editMode && editDraftDate !== null}
+            {#if dateEditing}
+              <input bind:this={dateEditor} class="commit-metadata-editor-input date-metadata-editor" type="text" aria-label="Edit author date" title="Use an ISO 8601 date with timezone" value={editDraftDate} on:input={editDate} on:keydown|stopPropagation disabled={editDraftLocked}>
+            {:else}
+              <button class="copy-layer metadata-copy commit-metadata-edit-trigger" type="button" title="Edit author date" on:click={() => void beginDateEdit()} disabled={editDraftLocked}><span class="copy-target">{formatDate(displayedDate, true)}</span></button>
+            {/if}
+          {:else}
+            <button class="copy-layer metadata-copy" type="button" title="Copy date" on:click={() => void copyLayer(formatDate(selected.date, true), 'Date')}><span class="copy-target">{formatDate(selected.date, true)}</span></button>
+          {/if}
+        </dd>
         <dt>{selectedRefContext.label}</dt>
         <dd class="ref-list">
           {#if selectedRefContext.values.length}

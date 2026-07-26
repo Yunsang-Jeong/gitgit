@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: overview
 scope: project
-last_updated: 2026-07-24
+last_updated: 2026-07-27
 ---
 
 # GitGit Overview
@@ -97,7 +97,7 @@ Read 성능은 system Git 경계를 유지하면서 process 수와 중복 parsin
 | Inspector pane width | WebView `localStorage`의 `gitgit.pane-widths.v1` | local application data가 유지되는 동안 |
 | Search sessions | Frontend process memory | application 종료 시 삭제 |
 
-`make uninstall`은 설치된 app bundle과 disposable cache를 제거하지만 registered-project list는 유지한다.
+`task uninstall`은 설치된 app bundle과 disposable cache를 제거하지만 registered-project list는 유지한다.
 
 등록 project를 해제해도 Git repository나 worktree는 삭제하지 않는다. 현재 열려 있는 project를 해제한 경우에도 현재 worktree는 다른 project를 선택할 때까지 열린 상태로 유지한다.
 
@@ -119,15 +119,15 @@ Repository와 search option을 제어하는 `GITGIT_*` environment variable은 �
 ## 개발과 release 범위
 
 ```sh
-make dev-browser # Wails browser bridge를 localhost:34116에서 실행
-make check       # frontend test/check/build, Go race/vet, native build verification
-make build       # local app compile/sign 검증 후 임시 bundle 제거
-make bundle      # desktop/build/bin/GitGit.app을 명시적으로 보존
-make install     # $HOME/Applications/GitGit.app 교체 후 중간 artifact 제거
-make test-random # deterministic randomized Go suites
+task dev:browser # Wails browser bridge를 localhost:34116에서 실행
+task check       # frontend test/check/build, Go race/vet, native build verification
+task build       # local app compile/sign 검증 후 임시 bundle 제거
+task bundle      # desktop/build/bin/GitGit.app을 명시적으로 보존
+task install     # $HOME/Applications/GitGit.app 교체 후 중간 artifact 제거
+task test:random # deterministic randomized Go suites
 ```
 
-Product code와 test 변경은 [Development Gate](development.md)의 browser-first 절차를 따른다. `make dev`는 `make dev-browser`의 alias이며, port가 충돌하면 `WAILS_DEVSERVER=localhost:<port>`로 바꿀 수 있다.
+Product code와 test 변경은 [Development Gate](development.md)의 browser-first 절차를 따른다. `task dev`와 `task dev-browser`는 `task dev:browser`의 alias이며, port가 충돌하면 `WAILS_DEVSERVER=localhost:<port>`로 바꿀 수 있다. Taskfile은 frontend 입력에는 checksum cache를 적용하지만 release bundle은 매번 새로 수행한다.
 
 현재 product version은 `0.2.0`이다. Product version, timestamp build identifier, source revision은 status bar와 bundle metadata에 따로 기록된다.
 

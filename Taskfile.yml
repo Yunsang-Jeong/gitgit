@@ -1,0 +1,355 @@
+version: '3.50.0'
+
+# The public tasks below keep the release pipeline explicit. `deps` are used
+# only for independent guards; stateful release and verification steps call
+# child tasks serially so they never race over desktop/build/bin.
+
+set:
+  - errexit
+  - nounset
+  - pipefail
+
+vars:
+  ROOT_DIR: '{{.TASKFILE_DIR}}'
+  GO: '{{.GO | default "go"}}'
+  NPM: '{{.NPM | default "npm"}}'
+  NPM_BIN:
+    sh: 'if [ -n "${NPM_BIN:-}" ]; then printf "%s" "$NPM_BIN"; else command -v "{{.NPM}}" 2>/dev/null || true; fi'
+
+  APP_NAME: '{{.APP_NAME | default "GitGit"}}'
+  INSTALL_DIR:
+    sh: 'printf "%s" "${INSTALL_DIR:-$HOME/Applications}"'
+  PRODUCT_VERSION: '{{.PRODUCT_VERSION | default "0.2.0"}}'
+  MACOS_MINIMUM_VERSION: '{{.MACOS_MINIMUM_VERSION | default "11.0"}}'
+  BUILD_TIMESTAMP:
+    sh: 'printf "%s" "${BUILD_TIMESTAMP:-$(date "+%Y%m%d%H%M%S")}"'
+  BUILD_VERSION:
+    sh: |
+      if [ -n "${BUILD_VERSION:-}" ]; then
+        printf '%s' "$BUILD_VERSION"
+      else
+        printf '%s' "{{.BUILD_TIMESTAMP}}" | sed -E 's/^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})$/\1.\2.\3.\4\5\6/'
+      fi
+  SOURCE_REVISION:
+    sh: 'printf "%s" "${SOURCE_REVISION:-$(git describe --always --dirty 2>/dev/null || printf unknown)}"'
+  TEST_SEED: '{{.TEST_SEED | default "20260718"}}'
+  WAILS_PACKAGE: '{{.WAILS_PACKAGE | default "github.com/wailsapp/wails/v2/cmd/wails@v2.13.0"}}'
+  WAILS_DEVSERVER: '{{.WAILS_DEVSERVER | default "localhost:34116"}}'
+
+  SUBGIT_DIR:
+    sh: 'printf "%s" "${SUBGIT_DIR:-{{.ROOT_DIR}}/subgit}"'
+  SUBGIT_SETUP: '{{.ROOT_DIR}}/testdata/subgit/setup.sh'
+  DESKTOP_DIR: '{{.ROOT_DIR}}/desktop'
+  FRONTEND_DIR: '{{.ROOT_DIR}}/desktop/frontend'
+  BUILD_BIN_DIR: '{{.ROOT_DIR}}/desktop/build/bin'
+  APP_BUNDLE: '{{.ROOT_DIR}}/desktop/build/bin/{{.APP_NAME}}.app'
+  INSTALLED_APP: '{{.INSTALL_DIR}}/{{.APP_NAME}}.app'
+  INSTALL_STAGING_APP: '{{.INSTALL_DIR}}/.{{.APP_NAME}}.app.installing'
+  CACHE_DIR:
+    sh: 'printf "%s" "${CACHE_DIR:-$HOME/Library/Caches/com.wails.gitgit}"'
+  HOST_ARCH:
+    sh: 'uname -m'
+
+tasks:
+  default:
+    desc: Build and validate the app, then remove the temporary bundle.
+    cmds:
+      - task: build
+
+  build:
+    desc: Build and validate a local app, then remove the temporary bundle.
+    cmds:
+      - defer: { task: clean:bundle }
+      - task: toolchain:bundle
+      - task: bundle
+
+  bundle:
+    desc: Build and retain desktop/build/bin/GitGit.app for local inspection.
+    cmds:
+      - defer: |
+          {{if .EXIT_CODE}}
+          test -n "{{.BUILD_BIN_DIR}}" && test "{{.BUILD_BIN_DIR}}" != "/"
+          rm -rf -- "{{.BUILD_BIN_DIR}}"
+          {{else}}
+          true
+          {{end}}
+      - task: clean:bundle
+      - task: toolchain:bundle
+      - task: frontend:build
+      - task: bundle:darwin
+
+  install:
+    desc: Install GitGit.app into $HOME/Applications atomically.
+    preconditions:
+      - sh: 'test -n "{{.APP_NAME}}"'
+        msg: 'install requires a non-empty APP_NAME.'
+      - sh: 'test -n "{{.INSTALL_DIR}}" && test "{{.INSTALL_DIR}}" != "/"'
+        msg: 'install requires a safe INSTALL_DIR (not empty or /).'
+    cmds:
+      - defer: { task: clean:bundle }
+      - defer: { task: clean:install-staging }
+      - task: toolchain:install
+      - task: bundle
+      - 'test -d "{{.APP_BUNDLE}}"'
+      - 'mkdir -p "{{.INSTALL_DIR}}"'
+      - 'rm -rf -- "{{.INSTALL_STAGING_APP}}"'
+      - 'ditto "{{.APP_BUNDLE}}" "{{.INSTALL_STAGING_APP}}"'
+      - 'rm -rf -- "{{.INSTALLED_APP}}"'
+      - 'mv "{{.INSTALL_STAGING_APP}}" "{{.INSTALLED_APP}}"'
+
+  clean:
+    desc: Remove the disposable desktop build bundle.
+    cmds:
+      - task: toolchain:macos
+      - task: clean:bundle
+
+  uninstall:
+    desc: Remove the installed app and disposable Wails cache.
+    cmds:
+      - task: toolchain:macos
+      - task: clean:bundle
+      - task: guard:uninstall-paths
+      - 'rm -rf -- "{{.INSTALLED_APP}}"'
+      - 'rm -rf -- "{{.CACHE_DIR}}"'
+
+  dev:browser:
+    desc: Run the Wails browser bridge at localhost:34116.
+    aliases: [dev, dev-browser]
+    cmds:
+      - defer: { task: clean:bundle }
+      - task: toolchain:macos
+      - task: toolchain:go
+      - task: toolchain:npm
+      - |
+          PATH="$(dirname "{{.NPM_BIN}}"):$PATH" \
+            GITGIT_BROWSER_DEV=1 \
+            "{{.GO}}" -C "{{.DESKTOP_DIR}}" run "{{.WAILS_PACKAGE}}" dev -devserver "{{.WAILS_DEVSERVER}}"
+
+  test:
+    desc: Run frontend, root Go, and desktop Go tests.
+    deps: [toolchain:go, toolchain:npm]
+    cmds:
+      - task: test:frontend
+      - task: test:go
+      - task: test:desktop
+
+  test:random:
+    desc: Run deterministic randomized root Go suites.
+    aliases: [test-random]
+    deps: [toolchain:go]
+    cmds:
+      - 'RANDOM_TEST_SEED="{{.TEST_SEED}}" "{{.GO}}" test -count=1 -shuffle="{{.TEST_SEED}}" ./...'
+
+  check:
+    desc: Run the full frontend, Go, and native release verification suite.
+    cmds:
+      - defer: { task: clean:bundle }
+      - task: toolchain:native
+      - task: check:frontend
+      - task: check:go
+      - task: check:desktop
+      - task: check:native
+
+  check:native:
+    desc: Build, inspect, and verify a fresh signed macOS app bundle.
+    aliases: [check-native]
+    cmds:
+      - defer: { task: clean:bundle }
+      - task: toolchain:native
+      - task: bundle
+      - 'test "$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "{{.APP_BUNDLE}}/Contents/Info.plist")" = "{{.PRODUCT_VERSION}}"'
+      - 'test "$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "{{.APP_BUNDLE}}/Contents/Info.plist")" = "{{.BUILD_TIMESTAMP}}"'
+      - 'test "$(/usr/libexec/PlistBuddy -c "Print :GitGitBuildVersion" "{{.APP_BUNDLE}}/Contents/Info.plist")" = "{{.BUILD_VERSION}}"'
+      - 'test "$(/usr/libexec/PlistBuddy -c "Print :GitGitSourceRevision" "{{.APP_BUNDLE}}/Contents/Info.plist")" = "{{.SOURCE_REVISION}}"'
+      - 'test "$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "{{.APP_BUNDLE}}/Contents/Info.plist")" = "{{.MACOS_MINIMUM_VERSION}}"'
+      - 'file "{{.APP_BUNDLE}}/Contents/MacOS/{{.APP_NAME}}" | grep -q "{{.HOST_ARCH}}"'
+      - 'vtool -show-build "{{.APP_BUNDLE}}/Contents/MacOS/{{.APP_NAME}}" | grep -q "minos {{.MACOS_MINIMUM_VERSION}}"'
+      - 'codesign --verify --deep --strict --verbose=2 "{{.APP_BUNDLE}}"'
+
+  fixture:create:
+    desc: Create the managed subgit fixture repository.
+    aliases: [subgit]
+    deps: [toolchain:macos]
+    cmds:
+      - 'sh "{{.SUBGIT_SETUP}}" create "{{.SUBGIT_DIR}}"'
+
+  fixture:reset:
+    desc: Reset the managed subgit fixture repository.
+    aliases: [subgit-reset]
+    deps: [toolchain:macos]
+    cmds:
+      - 'sh "{{.SUBGIT_SETUP}}" reset "{{.SUBGIT_DIR}}"'
+
+  frontend:install:
+    desc: Install frontend dependencies when package inputs change.
+    aliases: [deps]
+    dir: '{{.FRONTEND_DIR}}'
+    deps: [toolchain:npm]
+    run: once
+    sources:
+      - ../../Taskfile.yml
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
+    status:
+      - '"{{.NPM_BIN}}" ls --depth=0 >/dev/null 2>&1'
+    method: checksum
+    cmds:
+      - '"{{.NPM_BIN}}" ci'
+
+  frontend:build:
+    desc: Build the Vite frontend when its inputs change.
+    aliases: [frontend-build]
+    dir: '{{.FRONTEND_DIR}}'
+    deps: [frontend:install]
+    sources:
+      - ../../Taskfile.yml
+      - package.json
+      - package-lock.json
+      - index.html
+      - tsconfig.json
+      - vite.config.ts
+      - src/**/*
+    generates:
+      - dist/index.html
+    method: checksum
+    cmds:
+      - '"{{.NPM_BIN}}" run build'
+
+  test:frontend:
+    internal: true
+    dir: '{{.FRONTEND_DIR}}'
+    deps: [frontend:install]
+    cmds:
+      - '"{{.NPM_BIN}}" test'
+
+  test:go:
+    internal: true
+    deps: [toolchain:go]
+    cmds:
+      - '"{{.GO}}" test -race -count=1 ./...'
+
+  test:desktop:
+    internal: true
+    dir: '{{.DESKTOP_DIR}}'
+    deps: [toolchain:go]
+    cmds:
+      - '"{{.GO}}" test -count=1 ./...'
+
+  check:frontend:
+    internal: true
+    dir: '{{.FRONTEND_DIR}}'
+    deps: [frontend:install]
+    cmds:
+      - '"{{.NPM_BIN}}" test'
+      - '"{{.NPM_BIN}}" run check'
+      - task: frontend:build
+
+  check:go:
+    internal: true
+    deps: [toolchain:go]
+    cmds:
+      - '"{{.GO}}" test -race -count=1 ./...'
+      - '"{{.GO}}" vet ./...'
+
+  check:desktop:
+    internal: true
+    dir: '{{.DESKTOP_DIR}}'
+    deps: [toolchain:go]
+    cmds:
+      - '"{{.GO}}" test -count=1 ./...'
+      - '"{{.GO}}" vet ./...'
+
+  clean:bundle:
+    internal: true
+    cmds:
+      - 'test -n "{{.BUILD_BIN_DIR}}" && test "{{.BUILD_BIN_DIR}}" != "/"'
+      - 'rm -rf -- "{{.BUILD_BIN_DIR}}"'
+
+  clean:install-staging:
+    internal: true
+    cmds:
+      - 'test -n "{{.INSTALL_STAGING_APP}}" && test "{{.INSTALL_STAGING_APP}}" != "/"'
+      - 'rm -rf -- "{{.INSTALL_STAGING_APP}}"'
+
+  bundle:darwin:
+    internal: true
+    platforms: [darwin]
+    dir: '{{.DESKTOP_DIR}}'
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '{{.MACOS_MINIMUM_VERSION}}'
+    cmds:
+      - defer: |
+          {{if .EXIT_CODE}}
+          test -n "{{.BUILD_BIN_DIR}}" && test "{{.BUILD_BIN_DIR}}" != "/"
+          rm -rf -- "{{.BUILD_BIN_DIR}}"
+          {{else}}
+          true
+          {{end}}
+      - 'test -n "{{.BUILD_BIN_DIR}}" && test "{{.BUILD_BIN_DIR}}" != "/"'
+      - 'rm -rf -- "{{.BUILD_BIN_DIR}}"'
+      - |
+          PATH="$(dirname "{{.NPM_BIN}}"):$PATH" \
+            "{{.GO}}" run "{{.WAILS_PACKAGE}}" build -s \
+              -ldflags "-X main.productVersion={{.PRODUCT_VERSION}} -X main.buildVersion={{.BUILD_VERSION}} -X main.sourceRevision={{.SOURCE_REVISION}}"
+      - 'test -d "{{.APP_BUNDLE}}"'
+      - '/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString {{.PRODUCT_VERSION}}" "{{.APP_BUNDLE}}/Contents/Info.plist"'
+      - '/usr/libexec/PlistBuddy -c "Set :CFBundleVersion {{.BUILD_TIMESTAMP}}" "{{.APP_BUNDLE}}/Contents/Info.plist"'
+      - '/usr/libexec/PlistBuddy -c "Set :GitGitBuildVersion {{.BUILD_VERSION}}" "{{.APP_BUNDLE}}/Contents/Info.plist"'
+      - '/usr/libexec/PlistBuddy -c "Set :GitGitSourceRevision {{.SOURCE_REVISION}}" "{{.APP_BUNDLE}}/Contents/Info.plist"'
+      - '/usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion {{.MACOS_MINIMUM_VERSION}}" "{{.APP_BUNDLE}}/Contents/Info.plist"'
+      - 'codesign --force --deep --sign - "{{.APP_BUNDLE}}"'
+
+  toolchain:macos:
+    internal: true
+    preconditions:
+      - sh: 'test "$(uname -s)" = Darwin'
+        msg: 'GitGit tasks require macOS.'
+
+  toolchain:go:
+    internal: true
+    deps: [toolchain:macos]
+    preconditions:
+      - sh: 'command -v "{{.GO}}" >/dev/null 2>&1'
+        msg: 'Go was not found. Set GO=/absolute/path/to/go or add go to PATH.'
+
+  toolchain:npm:
+    internal: true
+    deps: [toolchain:macos]
+    preconditions:
+      - sh: 'test -n "{{.NPM_BIN}}" && test -x "{{.NPM_BIN}}"'
+        msg: 'npm was not found. Set NPM=/absolute/path/to/npm or add npm to PATH.'
+
+  toolchain:bundle:
+    internal: true
+    deps: [toolchain:macos, toolchain:go, toolchain:npm]
+    preconditions:
+      - sh: 'command -v codesign >/dev/null 2>&1'
+        msg: 'bundle requires the macOS codesign command.'
+      - sh: 'test -x /usr/libexec/PlistBuddy'
+        msg: 'bundle requires /usr/libexec/PlistBuddy.'
+
+  toolchain:native:
+    internal: true
+    deps: [toolchain:bundle]
+    preconditions:
+      - sh: 'command -v vtool >/dev/null 2>&1'
+        msg: 'check:native requires the macOS vtool command.'
+
+  toolchain:install:
+    internal: true
+    deps: [toolchain:bundle]
+    preconditions:
+      - sh: 'command -v ditto >/dev/null 2>&1'
+        msg: 'install requires the macOS ditto command.'
+
+  guard:uninstall-paths:
+    internal: true
+    preconditions:
+      - sh: 'test -n "{{.APP_NAME}}"'
+        msg: 'uninstall requires a non-empty APP_NAME.'
+      - sh: 'test -n "{{.INSTALL_DIR}}" && test "{{.INSTALL_DIR}}" != "/"'
+        msg: 'uninstall requires a safe INSTALL_DIR (not empty or /).'
+      - sh: 'test -n "{{.CACHE_DIR}}" && test "{{.CACHE_DIR}}" != "/"'
+        msg: 'uninstall requires a safe CACHE_DIR (not empty or /).'

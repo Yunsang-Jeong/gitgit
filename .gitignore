@@ -1,4 +1,5 @@
 /subgit/
 /subgit-worktrees/
 /desktop/build/bin/
+/.task/
 .DS_Store

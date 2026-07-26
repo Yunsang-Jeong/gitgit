@@ -7,20 +7,23 @@ audience:
 status: active
 document_type: module
 scope: commit
-last_updated: 2026-07-24
+last_updated: 2026-07-27
 ---
 
 # Commit Module
 
 ## 목적
 
-Commit module은 선택한 worktree를 기준으로 Git history를 읽고, 별도의 checkout 없이 branch 범위를 비교하는 화면이다. 정확한 commit metadata와 changed files를 확인하는 read workflow가 기본이며, 조건을 만족할 때만 checked-out branch의 commit stack을 수정할 수 있다.
+Commit module은 선택한 worktree를 기준으로 Git history를 읽고, 별도의 checkout 없이 branch 범위를 비교하는 화면이다. 정확한 commit metadata와 changed files를 확인하는 read workflow가 기본이며, Edit Mode에서는 현재 보고 있는 history를 그대로 local rewrite draft로 전환하고, Review와 승인 뒤에만 local rewrite를 수행한다.
 
 상단 control의 순서는 다음과 같다.
 
 ```text
-[Worktree]  [Branch]  [Edit commits]  [Open Finder]  [Open Terminal]  [Open IDE]
+[Worktree: main]  [Branch: All branches]
 Preset   [My Jobs]  [3 Days]
+
+[✎ Edit Mode]  [▱ Open Finder]  [⌘ Open Terminal]  [↗ Open IDE]
+Inspector  [Changes]  [Files]
 ```
 
 ## Worktree와 Branch 선택
@@ -29,7 +32,7 @@ Preset   [My Jobs]  [3 Days]
 
 - **Worktree 선택**은 active repository root를 해당 checkout path로 바꾼다. Attached worktree는 checkout된 branch를, detached worktree는 `HEAD`를 초기 history scope로 사용한다.
 - **Branch 선택**은 active worktree를 바꾸거나 branch를 checkout하지 않는다. Commit table이 읽는 revision scope만 바꾼다.
-- Toolbar의 **Open Finder**, **Open Terminal**, **Open IDE**는 선택된 commit이나 file이 아니라 현재 선택된 worktree root를 연다.
+- Worktree와 Branch selector는 26px 높이의 가로 label/value control로 표시한다. Inspector 상단 action row에는 같은 너비의 **✎ Edit Mode**, **▱ Open Finder**, **⌘ Open Terminal**, **↗ Open IDE**를 둔다. 뒤 세 action은 선택된 commit이나 file이 아니라 현재 선택된 worktree root를 연다.
 - **All branches**는 실제 `All`이라는 branch와 혼동하지 않도록 자연어 scope로 표시한다.
 
 Branch dropdown은 다음 규칙을 사용한다.
@@ -97,54 +100,53 @@ Rule은 다음 field를 대상으로 한다.
 
 Action은 `Hide`, `Show`다. 여러 Show rule은 모두 만족해야 하고, Hide rule은 하나라도 만족하면 제외한다. `My Jobs`, `3 Days` 같은 Preset은 Settings에서 편집하며 `$me`와 `last:3d` 같은 값을 사용할 수 있다. 이전 settings에 남아 있는 `Highlight` rule은 load할 때 제외하며, 그 결과 유효한 rule이 하나도 없는 Preset도 표시하지 않는다.
 
-## Edit commits 활성화 조건
+## Edit Mode 진입
 
-`Edit commits`는 아래 조건을 모두 만족할 때 활성화된다.
+`Edit Mode`는 아래 조건을 만족하면 활성화된다.
 
-1. Repository와 선택된 commit이 있다.
+1. Repository가 열려 있다.
 2. Project/worktree 전환 중이 아니다.
-3. Active worktree가 detached `HEAD`가 아니라 local branch를 checkout하고 있다.
-4. Branch scope가 `All branches`가 아니다.
-5. 선택된 scope가 active worktree에서 실제로 checkout한 branch와 같다.
 
-Worktree가 dirty한 것만으로 editing을 막지는 않는다. 대신 rewrite 결과와 기존 index/worktree 변경이 겹치는지 적용 전에 검사한다.
+선택한 commit은 entry 조건이 아니다. `Edit Mode`를 누르는 시점의 branch scope, `All branches`, Preset 결과를 포함한 **현재 table의 visible commit 순서**를 local draft로 복제한다. 따라서 mode 진입 전후에 history 범위, 선택한 worktree, scope, scroll 위치를 새로 정하거나 바꾸지 않는다.
 
-Branch dropdown에서 다른 branch를 선택해도 checkout이 일어나지 않으므로, 그 branch에만 속한 commit은 편집할 수 없다. 해당 branch를 checkout한 worktree를 먼저 선택해야 한다.
+Branch scope는 그 scope를 rewrite target으로 사용한다. `All branches`는 보던 graph/table을 바꾸지 않되, repository의 **default branch**를 rewrite target으로 사용한다. 이 mode는 default branch가 현재 attached local worktree에 checkout된 상태에서만 시작할 수 있다. GitGit은 server의 editable first-parent head range를 별도로 읽어 table 안의 target row만 식별하며, side branch row는 계속 선택·조회할 수 있지만 reorder와 metadata edit는 할 수 없다. default branch row 사이의 reorder만 executable draft로 projection되고, side row가 그 사이에 끼어 있는 visual 배치는 Apply payload에 포함하지 않는다.
 
-## Rewrite 범위와 안전 장치
+실제 rewrite 대상의 first-parent 범위는 Review 단계에서 server가 다시 검증한다. active Preset 또는 server의 first-parent `HEAD` range와 정확히 맞지 않는 visual draft는 Review 결과에 이유를 표시하고 Apply를 열지 않는다. 이 경우에도 Edit Mode의 local draft는 유지되며, history refresh 또는 unfiltered target branch에서 새 draft를 시작할 수 있다. Remote-only default branch, root commit, 또는 default branch `HEAD`가 merge commit인 경우에는 `All branches` Edit Mode를 시작하지 않는다.
 
-선택한 commit부터 checked-out branch의 `HEAD`까지 first-parent chain을 oldest-first로 다시 만든다.
+Detached `HEAD` worktree도 visual draft의 진입을 막지 않는다. 다만 Review는 target branch가 checkout된 worktree를 요구하므로, detached draft는 Apply 전에 해당 branch worktree에서 다시 열어야 한다.
 
-지원하는 변경:
+Edit Mode는 modal이나 별도 workbench를 열지 않는다. 기존 `HistoryToolbar → CommitTable → Inspector` 구성을 그대로 유지한다. Inspector action row의 label은 진입하면 `Exit Edit Mode`로 바뀌고, Commit table에는 inset outline이 생긴다. Worktree/branch selector와 top-level repository action은 mode 동안 잠긴다.
 
-- Commit 순서 변경
-- Multiline commit message 수정
-- 해당 commit이 변경한 regular text file의 content 수정 또는 삭제/복원
+## Edit Mode, Review, Apply
 
-거부하는 조건:
+Edit Mode에서는 **Commit 순서와 message, Author, Author date draft를 local state에서 조정**한다. 모드 진입 직후 기존 History toolbar와 Commit table 사이에 compact Edit Mode rail이 나타난다. 이 rail은 `Review`를 소유하며, Review가 완료되면 같은 영역이 아래로 확장되어 Commit table을 밀어내는 review sheet가 된다. Inspector는 계속 선택한 한 commit의 상세 편집만 담당하며, 별도 Apply footer는 두지 않는다.
 
-- Root commit
-- 선택 범위 안의 merge commit
-- Checked-out branch의 first-parent history에 없는 commit
-- 100개를 초과하는 commit range
-- 2 MiB를 초과하는 file
-- Binary file
-- Symlink, gitlink 등 non-regular Git entry
-- Rewrite 대상 tree와 기존 worktree/index 변경의 충돌
-- 적용 도중 branch `HEAD`가 예상 값에서 변경된 경우
+- Commit table은 평상시와 같은 compact row, ref badge, graph, 날짜 구분선, Inspector 선택 흐름을 유지한다.
+- Draft는 Commit Page에서 보던 newest-first UI 순서 그대로 보관하고 표시한다.
+- Branch scope에서는 각 commit row 전체를 click-and-drag하여 다른 row의 위 또는 아래에 drop할 수 있다. `All branches`에서는 default branch target row만 drag/drop 대상이며, side branch row는 read-only다. 별도 drag handle, 순번, 이동 안내 행은 추가하지 않는다.
+- Drag 중 pointer가 이동 방향의 target row 안으로 30% 들어오면 주변 row가 위 또는 아래로 짧게 이동해 draft 위치를 미리 보여 준다. Preview reflow가 pointer 아래의 row를 바꿔도 작은 pointer 이동 안에서는 기존 preview를 유지해 왕복 animation을 막는다. Drop은 그 preview를 확정할 뿐이며, Graph는 animation 동안 잠시 숨겼다가 새 geometry와 함께 다시 표시한다.
+- 사용자가 직접 옮긴 commit row만 주황/노랑 background와 left accent로 표시한다. 다른 행이 밀려 위치가 달라진 것만으로는 표시하지 않으며, 원래 위치로 돌아오면 강조가 사라진다.
+- Row를 클릭하면 기존처럼 오른쪽 Inspector에서 해당 commit의 metadata, changed files와 diff를 읽는다. Edit Mode에서는 Inspector의 commit 제목, Author, Author date를 클릭해 그 자리에서 editor로 전환할 수 있다. message textarea는 줄바꿈과 wrapping에 맞춰 최대 180px까지 자동으로 높이를 늘리며, 그 이상은 내부 scroll을 사용한다. Author date는 timezone을 보존하는 ISO 8601 문자열로 입력한다. Review 전에는 원문과 직접 달라진 commit hash 옆에, Review 후에는 replacement가 생길 verified range 전체의 hash 옆에 `→ will be changed`를 표시한다.
+- Inspector 상단의 worktree action도 mode 동안은 실행하지 못한다.
+- `Exit Edit Mode`를 누르면 아직 적용하지 않은 local reorder draft를 버리고, 보던 Commit Page의 history로 돌아간다.
 
-Rewrite는 temporary worktree에서 준비한다. 모든 replacement commit 생성과 local-change 검증이 끝난 뒤에만 branch를 이동한다. 이전 head는 다음 namespace 아래에 보존한다.
+`Review`는 가장 오래된 direct change를 anchor로 삼아 target branch의 first-parent `base..HEAD` stack을 server에서 다시 읽는다. `All branches` draft는 default branch row만 남긴 projection으로 검증한다. GitGit은 target branch를 자동 checkout하지 않는다. 검증 뒤 다음 영향만 요약한다.
 
-```text
-refs/gitgit/backups/<branch>/<timestamp>
-```
+- target branch와 `base → HEAD` lease
+- 새 hash를 받는 commit 수
+- 직접 수정한 commit 수와 뒤따라 replacement가 되는 commit 수
+- local rewrite만 수행하며 push는 별도라는 점
 
-Default branch를 rewrite할 때는 별도 warning과 confirmation checkbox가 필요하다. 성공 후 commit hash가 바뀔 수 있지만 GitGit은 push 또는 force push를 자동 수행하지 않는다.
+Review가 완료된 뒤 draft를 한 글자라도 수정하거나 다시 drag하면 Review와 approval은 즉시 무효가 된다. Review sheet는 `Verified range: base → current HEAD`, 직접 수정한 commit의 변경 종류, replacement hash를 받는 전체 commit 수와 dependent replacement 수를 보여 준다. 전체 rewrite stack을 commit별 hash로 나열하지 않는다. Review가 유효할 때만 acknowledgement checkbox가 보이며, default branch는 default-branch history rewrite임을 명시한다. acknowledgement 이후 `Apply N`은 temporary worktree에서 replay하고, original `HEAD` backup ref를 만든 뒤 lease로 branch를 옮긴다. Author와 Author date override도 이 payload에 포함된다. Apply 중에는 draft editing과 Exit Edit Mode를 잠그며, 성공하면 history를 refresh하고 Edit Mode를 종료한다. 실패하면 local draft를 유지하고 review sheet에 오류를 남긴다.
+
+현재 table edit flow는 file 수정·삭제·복원과 provenance checkbox를 아직 노출하지 않는다. 향후 optional provenance를 적용할 때 replacement commit에는 `rewritten from: <source hash>`를 기록하며, 과거 `GitGit-Rewritten-From:` trailer는 재작성 시 새 형식으로 교체한다.
 
 ## 현재 제공하지 않는 것
 
 - Branch selector를 통한 checkout
 - Merge commit reorder
 - Commit split/squash/fixup 전용 workflow
+- default branch 이외의 All branches target 선택 UI
+- File 수정·삭제·복원 UI와 provenance opt-in UI
 - Remote push와 force push
 - Backup ref 정리 UI

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { flip } from 'svelte/animate'
+  import { cubicOut } from 'svelte/easing'
   import { onDestroy, onMount } from 'svelte'
   import ContextMenu from './ContextMenu.svelte'
   import RemoteBadgeIcon from './RemoteBadgeIcon.svelte'
@@ -7,6 +9,7 @@
   import { commitGraphLaneLimitForWidth, commitGraphWidthForLaneCount, minimumVisibleGraphLanes } from '../lib/commit-graph-sizing'
   import { buildHistoryDateRows, buildHistoryRowGeometry } from '../lib/history-date-rows'
   import { isCommitVisible } from '../lib/history'
+  import { directionalDropInsertionIndex, moveCommitTo, stabilizeDragPreview, type DragPreviewState } from '../lib/commit-edit'
   import { isLocalDefaultBranchBadge, summarizeRefBadges } from '../lib/remotes'
   import type { CommitFilterLogic, CommitFilterRule, CommitSummary, ContextMenuItem, HistoryFilterProgress, RemoteBadgeRule, RemoteInfo } from '../lib/types'
 
@@ -28,6 +31,11 @@
   export let onSelect: (commit: CommitSummary) => void
   export let onLoadMore: () => void
   export let onSearchMessage: (message: string) => void
+  export let editMode = false
+  export let editCommits: CommitSummary[] = []
+  export let editableCommitIDs: string[] = []
+  export let editMovedCommitIDs: string[] = []
+  export let onEditMove: (commitID: string, insertionIndex: number) => boolean = () => false
 
   let contextMenu: {
     x: number
@@ -40,18 +48,34 @@
   let copyToastTimer: ReturnType<typeof setTimeout> | undefined
   let commitTableElement: HTMLDivElement
   let graphLaneLimit = minimumVisibleGraphLanes
+  let draggedEditCommit = ''
+  let editDragPreview: DragPreviewState | null = null
+  let suppressEditClickUntil = 0
+  let editReordering = false
+  let editReorderTimer: ReturnType<typeof setTimeout> | undefined
 
-  $: displayedCommits = commits.filter((commit) => isCommitVisible(commit, rules, logic))
+  const editRowFlip = { duration: 170, easing: cubicOut }
+  const editPreviewHoldDistance = commitGraphRowHeight * 0.125
+
+  $: previewEditCommits = editMode && draggedEditCommit && editDragPreview !== null
+    ? moveCommitTo(editCommits, draggedEditCommit, editDragPreview.insertionIndex)
+    : editCommits
+  $: tableCommits = editMode ? previewEditCommits : commits
+  $: displayedCommits = editMode
+    ? tableCommits
+    : tableCommits.filter((commit) => isCommitVisible(commit, rules, logic))
   $: historyRows = buildHistoryDateRows(displayedCommits)
   $: historyRowGeometry = buildHistoryRowGeometry(historyRows, commitGraphRowHeight)
-  $: fullGraphLayout = buildCommitGraph(commits, defaultBranch, graphLaneLimit, allBranches)
-  $: visibleGraphCommits = projectVisibleCommits(commits, new Set(displayedCommits.map((commit) => commit.commit)))
-  $: visiblePrimaryBranch = hasPrimaryBranchHead(visibleGraphCommits, defaultBranch, allBranches) ? defaultBranch : ''
-  $: localDefaultGraphLane = Boolean(visiblePrimaryBranch) && isLocalPrimaryBranchHead(visibleGraphCommits, visiblePrimaryBranch, allBranches)
-  $: graphLayout = buildCommitGraph(visibleGraphCommits, visiblePrimaryBranch, graphLaneLimit, allBranches)
+  $: tableAllBranches = allBranches
+  $: fullGraphLayout = buildCommitGraph(tableCommits, defaultBranch, graphLaneLimit, tableAllBranches)
+  $: visibleGraphCommits = projectVisibleCommits(tableCommits, new Set(displayedCommits.map((commit) => commit.commit)))
+  $: visiblePrimaryBranch = hasPrimaryBranchHead(visibleGraphCommits, defaultBranch, tableAllBranches) ? defaultBranch : ''
+  $: localDefaultGraphLane = Boolean(visiblePrimaryBranch) && isLocalPrimaryBranchHead(visibleGraphCommits, visiblePrimaryBranch, tableAllBranches)
+  $: graphLayout = buildCommitGraph(visibleGraphCommits, visiblePrimaryBranch, graphLaneLimit, tableAllBranches)
   $: graphWidth = commitGraphWidthForLaneCount(graphLayout.laneCount)
   $: graphDrawing = buildCommitGraphDrawing(visibleGraphCommits, graphLayout.rows, Boolean(visiblePrimaryBranch), historyRowGeometry.tops, historyRowGeometry.height)
   $: graphVersion = `${graphLaneLimit}|${visiblePrimaryBranch}|${localDefaultGraphLane}|${historyRows.map((row) => `${row.separator?.key ?? ''}:${row.commit.commit}:${(row.commit.parents ?? []).join(',')}`).join(';')}`
+  $: editableEditCommitIDSet = new Set(editableCommitIDs)
 
   onMount(() => {
     const observer = new ResizeObserver(([entry]) => {
@@ -67,7 +91,7 @@
   }
 
   function handleScroll(event: Event): void {
-    if (loading || loadingMore || !hasMore || !autoLoad) return
+    if (editMode || loading || loadingMore || !hasMore || !autoLoad) return
     const target = event.currentTarget as HTMLDivElement
     if (target.scrollTop <= 0) return
     const remaining = target.scrollHeight - target.scrollTop - target.clientHeight
@@ -77,6 +101,90 @@
   function selectWithKeyboard(event: KeyboardEvent, commit: CommitSummary): void {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
+    onSelect(commit)
+  }
+
+  function beginEditDrag(event: DragEvent, commit: CommitSummary): void {
+    if (!isEditableEditCommit(commit.commit)) return
+    draggedEditCommit = commit.commit
+    editDragPreview = null
+    event.dataTransfer?.setData('text/plain', commit.commit)
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+  }
+
+  function insertionIndexForEditDrop(event: DragEvent, targetCommitID: string, sourceCommitID = draggedEditCommit): number {
+    const targetIndex = editCommits.findIndex((commit) => commit.commit === targetCommitID)
+    if (targetIndex < 0) return editCommits.length
+    const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const sourceIndex = editCommits.findIndex((commit) => commit.commit === sourceCommitID)
+    return directionalDropInsertionIndex({
+      sourceIndex,
+      targetIndex,
+      pointerY: event.clientY,
+      targetTop: bounds.top,
+      targetHeight: bounds.height,
+    })
+  }
+
+  function updateEditDropTarget(event: DragEvent, targetCommitID: string): void {
+    if (!editMode) return
+    const commit = draggedEditCommit || event.dataTransfer?.getData('text/plain') || ''
+    if (!commit || !isEditableEditCommit(commit) || !isEditableEditCommit(targetCommitID)) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    if (targetCommitID === commit && editDragPreview) return
+
+    const insertionIndex = targetCommitID === commit
+      ? null
+      : insertionIndexForEditDrop(event, targetCommitID, commit)
+    const candidateInsertionIndex = insertionIndex !== null && moveCommitTo(editCommits, commit, insertionIndex) !== editCommits
+      ? insertionIndex
+      : null
+    const nextPreview = stabilizeDragPreview(editDragPreview, candidateInsertionIndex, event.clientY, editPreviewHoldDistance)
+    if (nextPreview === editDragPreview) return
+
+    const previewOrderChanged = nextPreview?.insertionIndex !== editDragPreview?.insertionIndex
+    editDragPreview = nextPreview
+    if (previewOrderChanged) beginEditReorderAnimation()
+  }
+
+  function commitEditDrop(event: DragEvent, targetCommitID: string): void {
+    if (!editMode) return
+    const commit = draggedEditCommit || event.dataTransfer?.getData('text/plain') || ''
+    if (!commit || !isEditableEditCommit(commit) || !isEditableEditCommit(targetCommitID)) {
+      clearEditDrag()
+      return
+    }
+    event.preventDefault()
+    const previewWasActive = editDragPreview !== null
+    const insertionIndex = editDragPreview?.insertionIndex ?? insertionIndexForEditDrop(event, targetCommitID, commit)
+    if (commit && onEditMove(commit, insertionIndex) && !previewWasActive) beginEditReorderAnimation()
+    suppressEditClickUntil = Date.now() + 120
+    editDragPreview = null
+    draggedEditCommit = ''
+  }
+
+  function clearEditDrag(): void {
+    editDragPreview = null
+    draggedEditCommit = ''
+  }
+
+  function isEditableEditCommit(commitID: string): boolean {
+    return editMode && editableEditCommitIDSet.has(commitID)
+  }
+
+  function beginEditReorderAnimation(): void {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    editReordering = true
+    if (editReorderTimer) clearTimeout(editReorderTimer)
+    editReorderTimer = setTimeout(() => {
+      editReordering = false
+      editReorderTimer = undefined
+    }, editRowFlip.duration)
+  }
+
+  function selectDisplayedCommit(commit: CommitSummary): void {
+    if (editMode && Date.now() < suppressEditClickUntil) return
     onSelect(commit)
   }
 
@@ -109,15 +217,16 @@
 
   onDestroy(() => {
     if (copyToastTimer) clearTimeout(copyToastTimer)
+    if (editReorderTimer) clearTimeout(editReorderTimer)
   })
 </script>
 
-<div bind:this={commitTableElement} class="commit-table" role="table" aria-label="Commit history" style={`--graph-width: ${graphWidth}px; --commit-row-height: ${commitGraphRowHeight}px`}>
+<div bind:this={commitTableElement} class:edit-mode={editMode} class:edit-reordering={editReordering} class="commit-table" role="table" aria-label={editMode ? 'Editable commit history' : 'Commit history'} style={`--graph-width: ${graphWidth}px; --commit-row-height: ${commitGraphRowHeight}px`}>
   <div class="commit-table-scroll" on:scroll={handleScroll}>
     <div class="commit-body">
       {#if loading}
         <div class="history-empty"><span class="empty-spinner"></span><strong>Loading commit history…</strong></div>
-      {:else if commits.length === 0}
+      {:else if tableCommits.length === 0}
         <div class="history-empty"><span class="empty-symbol">∅</span><strong>No commits in this scope</strong></div>
       {:else if displayedCommits.length === 0}
         <div class="history-empty">
@@ -150,13 +259,9 @@
             {/each}
           </svg>
         {/key}
-        {#each historyRows as historyRow (historyRow.commit.commit)}
+        {#key editMode}
+          {#each historyRows as historyRow, editRowIndex (historyRow.commit.commit)}
             {@const commit = historyRow.commit}
-            {#if historyRow.separator}
-              <div class="history-date-separator" role="separator" aria-label={historyRow.separator.label}>
-                <time>{historyRow.separator.label}</time><span></span>
-              </div>
-            {/if}
             {@const historicalBranch = fullGraphLayout.historicalBranches.get(commit.commit) ?? ''}
             {@const historicalBranchTip = fullGraphLayout.historicalBranchTips.get(commit.commit) ?? ''}
             {@const presentedCommit = historicalBranch ? { ...commit, historical_branch: historicalBranch } : commit}
@@ -164,47 +269,65 @@
             {@const primaryRef = refSummary.primary}
             {@const graphRow = graphLayout.rows.get(commit.commit)}
             {@const localDefaultBranch = isLocalDefaultBranchBadge(primaryRef, defaultBranch)}
+            {@const editableEditCommit = isEditableEditCommit(commit.commit)}
             {@const refColor = localDefaultBranch
               ? '#e7f8ff'
               : graphRow?.nodeOverflow
                 ? '#8d9da3'
                 : commitGraphLaneColor(graphRow?.nodeColor ?? defaultBranchGraphColorIndex)}
-            <div
-              class:selected={selectedCommit === commit.commit}
-              class="commit-row commit-grid"
-              role="row"
-              tabindex="0"
-              aria-selected={selectedCommit === commit.commit}
-              on:click={() => onSelect(presentedCommit)}
-              on:keydown={(event) => selectWithKeyboard(event, presentedCommit)}
-            >
-              <span class="history-ref-cell" role="cell">
-                {#if primaryRef}
-                  <small class:local-default={localDefaultBranch} class:remote={primaryRef.remote} class="history-primary-ref" style={`--history-ref-color: ${refColor}`} title={primaryRef.title} aria-label={primaryRef.label}>
-                    {#if primaryRef.remote}<RemoteBadgeIcon name={primaryRef.icon} />{/if}
-                    <span>{primaryRef.branch}</span>
-                  </small>
-                  {#if refSummary.remaining.length}
-                    <small class="history-ref-count" title={`Additional refs: ${refSummary.remaining.map((badge) => badge.title).join(', ')}`} aria-label={`${refSummary.remaining.length} additional refs`}>+{refSummary.remaining.length}</small>
+            <div class="commit-row-motion" animate:flip={editRowFlip}>
+              {#if historyRow.separator}
+                <div class="history-date-separator" role="separator" aria-label={historyRow.separator.label}>
+                  <time>{historyRow.separator.label}</time><span></span>
+                </div>
+              {/if}
+              <div
+                class:selected={selectedCommit === commit.commit}
+                class:edit-mode-row={editMode}
+                class:edit-readonly-row={editMode && !editableEditCommit}
+                class:moved={editMode && editMovedCommitIDs.includes(commit.commit)}
+                class:dragging={editableEditCommit && draggedEditCommit === commit.commit}
+                class="commit-row commit-grid"
+                role="row"
+                tabindex="0"
+                aria-selected={selectedCommit === commit.commit}
+                draggable={editableEditCommit}
+                on:click={() => selectDisplayedCommit(presentedCommit)}
+                on:keydown={(event) => selectWithKeyboard(event, presentedCommit)}
+                on:dragstart={(event) => beginEditDrag(event, presentedCommit)}
+                on:dragover={(event) => updateEditDropTarget(event, commit.commit)}
+                on:drop={(event) => commitEditDrop(event, commit.commit)}
+                on:dragend={clearEditDrag}
+              >
+                <span class="history-ref-cell" role="cell">
+                  {#if primaryRef}
+                    <small class:local-default={localDefaultBranch} class:remote={primaryRef.remote} class="history-primary-ref" style={`--history-ref-color: ${refColor}`} title={primaryRef.title} aria-label={primaryRef.label}>
+                      {#if primaryRef.remote}<RemoteBadgeIcon name={primaryRef.icon} />{/if}
+                      <span>{primaryRef.branch}</span>
+                    </small>
+                    {#if refSummary.remaining.length}
+                      <small class="history-ref-count" title={`Additional refs: ${refSummary.remaining.map((badge) => badge.title).join(', ')}`} aria-label={`${refSummary.remaining.length} additional refs`}>+{refSummary.remaining.length}</small>
+                    {/if}
+                  {:else if historicalBranchTip}
+                    <small class="history-primary-ref history-branch-tip" style={`--history-ref-color: ${refColor}`} title={`Merged branch: ${historicalBranchTip}`} aria-label={`Merged branch ${historicalBranchTip}`}>
+                      <span>{historicalBranchTip}</span>
+                    </small>
                   {/if}
-                {:else if historicalBranchTip}
-                  <small class="history-primary-ref history-branch-tip" style={`--history-ref-color: ${refColor}`} title={`Merged branch: ${historicalBranchTip}`} aria-label={`Merged branch ${historicalBranchTip}`}>
-                    <span>{historicalBranchTip}</span>
-                  </small>
-                {/if}
-              </span>
-              <span class="graph-cell" role="cell" aria-label={`${(commit.parents ?? []).length} parents`}>
-              </span>
-              <button class:interaction-active={contextMenu?.target.commit === commit.commit && contextMenu.target.field === 'message'} class="history-data-cell history-message-cell context-action" type="button" role="cell" title={`${commit.message}\n\nSelect commit · Right-click for actions`} on:click|stopPropagation={() => onSelect(presentedCommit)} on:contextmenu|preventDefault|stopPropagation={(event) => openMessageMenu(event, presentedCommit)}>
-                <strong class="copy-target">{title(commit.message)}</strong>
-                {#if commit.commit === branchPoint}
-                  <small class="branch-point" title="Common ancestor with the default branch">Branch point</small>
-                {/if}
-                <span class="history-author" title={commit.author.email ? `${commit.author.name} <${commit.author.email}>` : commit.author.name}>{commit.author.name || commit.author.email}</span>
-              </button>
+                </span>
+                <span class="graph-cell" role="cell" aria-label={`${(commit.parents ?? []).length} parents`}>
+                </span>
+                <button class:interaction-active={contextMenu?.target.commit === commit.commit && contextMenu.target.field === 'message'} class="history-data-cell history-message-cell context-action" type="button" role="cell" title={`${commit.message}\n\nSelect commit · Right-click for actions`} on:click|stopPropagation={() => selectDisplayedCommit(presentedCommit)} on:contextmenu|preventDefault|stopPropagation={(event) => openMessageMenu(event, presentedCommit)}>
+                  <strong class="copy-target">{title(commit.message)}</strong>
+                  {#if commit.commit === branchPoint}
+                    <small class="branch-point" title="Common ancestor with the default branch">Branch point</small>
+                  {/if}
+                  <span class="history-author" title={commit.author.email ? `${commit.author.name} <${commit.author.email}>` : commit.author.name}>{commit.author.name || commit.author.email}</span>
+                </button>
+              </div>
             </div>
-        {/each}
-        {#if filterProgress}
+          {/each}
+        {/key}
+        {#if !editMode && filterProgress}
           <div class="history-filter-progress" role="status" aria-live="polite">
             <span class="empty-spinner"></span>
             <span class="history-filter-progress-copy">
@@ -213,7 +336,7 @@
               <small>Targeting about {filterProgress.target} visible commits · {filterProgress.visible} found · checked {filterProgress.scanned} of {filterProgress.total} · scanning {filterProgress.scope} toward its initial commit</small>
             </span>
           </div>
-        {:else if hasMore}
+        {:else if !editMode && hasMore}
           <button class="history-load-more" type="button" disabled={loadingMore} on:click={onLoadMore}>
             {#if loadingMore}<span class="empty-spinner"></span>{/if}
             <span>{loadingMore ? 'Loading more commits…' : !autoLoad && branchPoint ? 'Load history before branch point' : 'Load more commits'}</span>

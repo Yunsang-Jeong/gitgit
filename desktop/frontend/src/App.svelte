@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import CommitEditor from './components/CommitEditor.svelte'
   import CommitTable from './components/CommitTable.svelte'
   import HistoryToolbar from './components/HistoryToolbar.svelte'
   import Inspector from './components/Inspector.svelte'
@@ -11,6 +10,20 @@
   import WorktreeGrid from './components/WorktreeGrid.svelte'
   import { api } from './lib/api'
   import { worktreeHistoryScope } from './lib/branch-options'
+  import {
+    commitDraftChangeKinds,
+    commitDraftChangedIDs,
+    commitDraftFingerprint,
+    commitEditDisabledReason,
+    deriveRewriteStackDraft,
+    directlyMovedCommitIDs,
+    moveCommitTo,
+    oldestAffectedOriginalIndex,
+    projectVisualDraftToTargetChain,
+    resolveEditTargetBranch,
+    type CommitDraftChangeKind,
+    type TargetChainProjectionResult,
+  } from './lib/commit-edit'
   import { normalizeSearchBoundary } from './lib/datetime'
   import { visibleCommits } from './lib/history'
   import { cloneFilterPresets, defaultFilterLogic, defaultFilterPresets, resolvePresetRules } from './lib/presets'
@@ -19,6 +32,7 @@
   import { searchExpressionError, searchPatternText } from './lib/search-expression'
   import type {
     AppSettings,
+    Author,
     ChangedFilesView,
     CommitDetail,
     CommitEditStack,
@@ -28,7 +42,6 @@
     CommitFilterLogic,
     CommitFilterPreset,
     CommitSummary,
-    CommitFileContent,
     HistoryResponse,
     HistoryFilterProgress,
     IDEPreference,
@@ -75,6 +88,11 @@
   }
 
   type StatusKind = 'info' | 'success' | 'warning' | 'error'
+
+  type EditReviewChange = {
+    commit: CommitSummary
+    kinds: CommitDraftChangeKind[]
+  }
 
   const paneWidthKey = 'gitgit.pane-widths.v1'
   const settingsKey = 'gitgit.settings.v1'
@@ -130,11 +148,26 @@
   let projectPendingRemoval: RegisteredProject | null = null
   let removingProject = false
   let pruningProjects = false
-  let commitEditorOpen = false
-  let commitEditorStack: CommitEditStack | null = null
-  let commitEditorLoading = false
-  let commitEditorApplying = false
-  let commitEditorError = ''
+  let editModeOpen = false
+  let editOriginalDisplayCommits: CommitSummary[] = []
+  let editDraftCommits: CommitSummary[] = []
+  let editTargetBranch = ''
+  let editTargetCommits: CommitSummary[] = []
+  let editTargetsDefaultBranch = false
+  let editModePreparing = false
+  let editModePrepareRequestID = 0
+  let editMovedCommitIDs: string[] = []
+  let editDraftChangedCommitIDs: string[] = []
+  let editChangedCommitIDs: string[] = []
+  let editWillChangeCommitIDs: string[] = []
+  let selectedEditCommit: CommitSummary | null = null
+  let editReviewStack: CommitEditStack | null = null
+  let editReviewFingerprint = ''
+  let editReviewError = ''
+  let editReviewing = false
+  let editApplying = false
+  let editApprovalConfirmed = false
+  let editReviewRequestID = 0
   let discoveringProjects = false
   let discoveryMessage = ''
   let appSettings: AppSettings = defaultAppSettings()
@@ -154,7 +187,6 @@
   let searchRequestID = 0
   let syncRequestID = 0
   let pullRequestID = 0
-  let commitEditorRequestID = 0
 
   $: filterRules = resolvePresetRules(appSettings.presets, activePresetIDs, repository?.user ?? { name: '', email: '' })
   $: commitFilterRules = branchMembershipLoading ? filterRules.filter((rule) => rule.field !== 'branch') : filterRules
@@ -162,18 +194,60 @@
   $: groupedSearchResults = groupSearchResultsByCommit(results)
   $: selectedSearchResult = groupedSearchResults[selectedSearchIndex] ?? null
   $: selectedForInspector = detailOverride ?? historyDetail
+  $: editDraftChangedCommitIDs = commitDraftChangedIDs(editOriginalDisplayCommits, editDraftCommits)
+  $: editChangedCommitIDs = [...new Set([...editMovedCommitIDs, ...editDraftChangedCommitIDs])]
+  $: editTargetCommitIDs = editTargetCommits.map((commit) => commit.commit)
+  $: editRewriteOriginalCommits = editTargetsDefaultBranch ? editTargetCommits : editOriginalDisplayCommits
+  $: editTargetDraftProjection = editTargetsDefaultBranch
+    ? projectVisualDraftToTargetChain(
+      editOriginalDisplayCommits,
+      editDraftCommits,
+      editTargetCommits,
+      editChangedCommitIDs,
+    )
+    : { ok: true, commits: editDraftCommits } satisfies TargetChainProjectionResult<CommitSummary>
+  $: editDraftFingerprint = commitDraftFingerprint(editDraftCommits)
+  $: editHasChanges = editChangedCommitIDs.length > 0
+  $: editReviewDraft = editReviewStack && editTargetDraftProjection.ok
+    ? deriveRewriteStackDraft(editRewriteOriginalCommits, editTargetDraftProjection.commits, editReviewStack.commits)
+    : null
+  $: editReviewIsCurrent = Boolean(
+    editReviewStack
+    && editHasChanges
+    && editReviewFingerprint === editDraftFingerprint
+    && editReviewDraft?.ok,
+  )
+  $: editReviewCommits = editReviewDraft?.ok ? editReviewDraft.commits : []
+  $: editWillChangeCommitIDs = editReviewIsCurrent && editReviewStack
+    ? editReviewStack.commits.map((commit) => commit.commit)
+    : editChangedCommitIDs
+  $: editDirectReviewChangeCount = editReviewCommits.filter((commit) => editChangedCommitIDs.includes(commit.commit)).length
+  $: editDependentReplacementCount = Math.max(0, editReviewCommits.length - editDirectReviewChangeCount)
+  $: editReviewDirectChanges = editReviewIsCurrent
+    ? editDraftCommits
+      .filter((commit) => editReviewCommits.some((reviewCommit) => reviewCommit.commit === commit.commit))
+      .map((commit) => ({
+        commit,
+        kinds: commitDraftChangeKinds(editOriginalDisplayCommits, commit, editMovedCommitIDs),
+      } satisfies EditReviewChange))
+      .filter((change) => change.kinds.length > 0)
+    : []
+  $: editReviewVisibleChanges = editReviewDirectChanges.slice(0, 3)
+  $: editReviewHiddenChangeCount = Math.max(0, editReviewDirectChanges.length - editReviewVisibleChanges.length)
+  $: canReviewEditDraft = editModeOpen && editHasChanges && !editModePreparing && !editReviewing && !editApplying && !historyLoading && !historyLoadingMore
+  $: canApplyEditDraft = editReviewIsCurrent && editApprovalConfirmed && !editReviewing && !editApplying
+  $: selectedEditCommit = editModeOpen && editTargetCommitIDs.includes(selectedCommit)
+    ? editDraftCommits.find((commit) => commit.commit === selectedCommit) ?? null
+    : null
   $: inspectorFileRevision = repository ? (historyAllBranches ? repository.default_branch : historyScope) : ''
   $: repositoryTransitioning = projectSwitching || worktreeSwitching
   $: currentWorktreeDetached = Boolean(repository && (repository.worktrees.find((worktree) => worktree.path === repository?.root)?.detached ?? repository.branch === 'detached'))
-  $: canEditCommits = Boolean(
-    repository
-    && selectedCommit
-    && !currentWorktreeDetached
-    && !historyAllBranches
-    && historyScope === repository.branch
-    && !repositoryTransitioning,
-  )
-  $: editDisabledReason = commitEditDisabledReason()
+  $: editDisabledReason = commitEditDisabledReason({
+    hasRepository: Boolean(repository),
+    projectSwitching,
+    worktreeSwitching,
+  })
+  $: canEditCommits = editDisabledReason === ''
   $: searchDraft = {
     patterns: patterns.map((pattern) => ({ ...pattern })),
     engine,
@@ -270,15 +344,6 @@
     worktreeSwitching = false
     historyLoading = false
     await loadHistory()
-  }
-
-  function commitEditDisabledReason(): string {
-    if (!repository || !selectedCommit) return 'Select a commit to edit.'
-    if (projectSwitching) return 'Wait for the project switch to finish.'
-    if (worktreeSwitching) return 'Wait for the worktree switch to finish.'
-    if (currentWorktreeDetached) return 'Commit editing requires a worktree with a local branch checked out.'
-    if (historyAllBranches || historyScope !== repository.branch) return `Select the checked-out branch ${repository.branch} before editing commits.`
-    return ''
   }
 
   async function loadHistory(): Promise<void> {
@@ -388,67 +453,378 @@
     await loadHistory()
   }
 
-  async function openCommitEditor(): Promise<void> {
-    if (!canEditCommits || !repository || !selectedCommit || commitEditorLoading || commitEditorApplying) {
+  function startEditMode(): void {
+    if (!canEditCommits || !repository) {
       if (editDisabledReason) setStatus(editDisabledReason, 'warning')
       return
     }
-    const requestID = ++commitEditorRequestID
+    if (editModePreparing || historyLoading || historyLoadingMore) {
+      setStatus('Wait for the current history load before entering Edit Mode.', 'warning')
+      return
+    }
+    const snapshot = cloneDisplayedCommits(visibleCommits(history.commits, filterRules, appSettings.filter_logic))
+    if (snapshot.length === 0) {
+      setStatus('There are no visible commits to edit.', 'warning')
+      return
+    }
+    const targetBranch = resolveEditTargetBranch(historyScope, historyAllBranches, repository.default_branch)
+    if (!targetBranch) {
+      setStatus('GitGit could not identify a branch to edit.', 'warning')
+      return
+    }
+    if (historyAllBranches && (currentWorktreeDetached || repository.branch !== targetBranch)) {
+      const targetWorktree = repository.worktrees.find((worktree) => !worktree.detached && worktree.branch === targetBranch)
+      setStatus(targetWorktree
+        ? `All branches rewrites default branch ${targetBranch}. Select its attached worktree before entering Edit Mode.`
+        : `All branches rewrites default branch ${targetBranch}, but it is not checked out by a local worktree.`, 'warning')
+      return
+    }
+    if (!historyAllBranches) {
+      openEditMode(snapshot, targetBranch, snapshot, false)
+      return
+    }
+    void startDefaultBranchEditMode(snapshot, targetBranch)
+  }
+
+  async function startDefaultBranchEditMode(snapshot: CommitSummary[], targetBranch: string): Promise<void> {
+    if (!repository) return
+    const requestID = ++editModePrepareRequestID
     const repositoryRoot = repository.root
-    commitEditorOpen = true
-    commitEditorStack = null
-    commitEditorLoading = true
-    commitEditorError = ''
+    const requestedScope = historyScope
+    const requestedAllBranches = historyAllBranches
+    editModePreparing = true
+    setStatus(`Preparing ${targetBranch} as the All branches edit target…`, 'info')
     try {
-      const stack = await api.prepareCommitEdit(selectedCommit)
-      if (requestID !== commitEditorRequestID || repository?.root !== repositoryRoot) return
-      commitEditorStack = stack
+      const target = await api.commitEditTarget(targetBranch)
+      if (
+        requestID !== editModePrepareRequestID
+        || repository?.root !== repositoryRoot
+        || repository?.branch !== targetBranch
+        || historyScope !== requestedScope
+        || historyAllBranches !== requestedAllBranches
+      ) return
+      const targetCommits = cloneDisplayedCommits(target.commits)
+      if (targetCommits.length === 0) {
+        setStatus(`GitGit could not read default branch ${targetBranch}.`, 'warning')
+        return
+      }
+      openEditMode(snapshot, targetBranch, targetCommits, true)
+      setStatus(`All branches Edit Mode targets default branch ${targetBranch}. Other branch commits stay read-only.`, 'info')
     } catch (error) {
-      if (requestID !== commitEditorRequestID || repository?.root !== repositoryRoot) return
-      commitEditorError = errorText(error)
+      if (requestID === editModePrepareRequestID && repository?.root === repositoryRoot) {
+        setStatus(errorText(error), 'error')
+      }
     } finally {
-      if (requestID === commitEditorRequestID) commitEditorLoading = false
+      if (requestID === editModePrepareRequestID) editModePreparing = false
     }
   }
 
-  function closeCommitEditor(): void {
-    if (commitEditorApplying) return
-    commitEditorRequestID++
-    commitEditorOpen = false
-    commitEditorStack = null
-    commitEditorLoading = false
-    commitEditorError = ''
+  function openEditMode(
+    visibleCommits: CommitSummary[],
+    targetBranch: string,
+    targetCommits: CommitSummary[],
+    targetsDefaultBranch: boolean,
+  ): void {
+    editOriginalDisplayCommits = cloneDisplayedCommits(visibleCommits)
+    editDraftCommits = cloneDisplayedCommits(visibleCommits)
+    editTargetBranch = targetBranch
+    editTargetCommits = cloneDisplayedCommits(targetCommits)
+    editTargetsDefaultBranch = targetsDefaultBranch
+    editMovedCommitIDs = []
+    resetEditReview()
+    editModeOpen = true
   }
 
-  async function loadCommitFileContent(commit: string, path: string): Promise<CommitFileContent> {
-    return api.commitFileContent(commit, path)
+  function cloneDisplayedCommits(commits: CommitSummary[]): CommitSummary[] {
+    return commits.map((commit) => ({
+      ...commit,
+      author: { ...commit.author },
+      parents: [...(commit.parents ?? [])],
+      refs: commit.refs ? [...commit.refs] : undefined,
+      branches: commit.branches ? [...commit.branches] : undefined,
+      files: (commit.files ?? []).map((file) => ({ ...file })),
+    }))
   }
 
-  async function applyCommitRewrite(request: RewriteCommitsRequest): Promise<void> {
-    if (!repository || commitEditorApplying) return
+  function resetEditMode(): void {
+    editModePrepareRequestID += 1
+    editModePreparing = false
+    resetEditReview()
+    editModeOpen = false
+    editOriginalDisplayCommits = []
+    editDraftCommits = []
+    editTargetBranch = ''
+    editTargetCommits = []
+    editTargetsDefaultBranch = false
+    editMovedCommitIDs = []
+  }
+
+  function resetEditReview(): void {
+    editReviewRequestID += 1
+    editReviewStack = null
+    editReviewFingerprint = ''
+    editReviewError = ''
+    editReviewing = false
+    editApplying = false
+    editApprovalConfirmed = false
+  }
+
+  function invalidateEditReview(): void {
+    if (!editReviewStack && !editReviewError && !editApprovalConfirmed && !editReviewing) return
+    resetEditReview()
+  }
+
+  function requestExitEditMode(): void {
+    resetEditMode()
+  }
+
+  function blockRepositoryActionDuringEdit(): boolean {
+    if (!editModeOpen) return false
+    setStatus('Exit Edit Mode before changing repository state.', 'warning')
+    return true
+  }
+
+  function chooseEditCommit(commit: CommitSummary): void {
+    void selectCommit(commit)
+  }
+
+  function isEditableEditCommit(commitID: string): boolean {
+    return editTargetCommitIDs.includes(commitID)
+  }
+
+  function moveEditCommit(commitID: string, insertionIndex: number): boolean {
+    if (editReviewing || editApplying || !isEditableEditCommit(commitID)) return false
+    const next = moveCommitTo(editDraftCommits, commitID, insertionIndex)
+    if (next === editDraftCommits) return false
+    const nextMovedCommitIDs = directlyMovedCommitIDs(editOriginalDisplayCommits, next, editMovedCommitIDs, commitID)
+    if (editTargetsDefaultBranch) {
+      const nextChangedCommitIDs = [...new Set([
+        ...nextMovedCommitIDs,
+        ...commitDraftChangedIDs(editOriginalDisplayCommits, next),
+      ])]
+      const nextProjection = projectVisualDraftToTargetChain(
+        editOriginalDisplayCommits,
+        next,
+        editTargetCommits,
+        nextChangedCommitIDs,
+      )
+      if (nextProjection.ok) {
+        const targetOrderChanged = nextProjection.commits.some(
+          (commit, index) => commit.commit !== editTargetCommits[index]?.commit,
+        )
+        if (!targetOrderChanged) return false
+      }
+    }
+    invalidateEditReview()
+    editDraftCommits = next
+    editMovedCommitIDs = nextMovedCommitIDs
+    return true
+  }
+
+  function updateEditCommitMessage(commitID: string, message: string): void {
+    if (editReviewing || editApplying || !isEditableEditCommit(commitID)) return
+    const current = editDraftCommits.find((commit) => commit.commit === commitID)
+    if (!current || current.message === message) return
+    invalidateEditReview()
+    editDraftCommits = editDraftCommits.map((commit) => (
+      commit.commit === commitID ? { ...commit, message } : commit
+    ))
+  }
+
+  function updateEditCommitAuthor(commitID: string, author: Author): void {
+    if (editReviewing || editApplying || !isEditableEditCommit(commitID)) return
+    const current = editDraftCommits.find((commit) => commit.commit === commitID)
+    if (!current || (current.author.name === author.name && current.author.email === author.email)) return
+    invalidateEditReview()
+    editDraftCommits = editDraftCommits.map((commit) => (
+      commit.commit === commitID ? { ...commit, author: { ...author } } : commit
+    ))
+  }
+
+  function updateEditCommitDate(commitID: string, date: string): void {
+    if (editReviewing || editApplying || !isEditableEditCommit(commitID)) return
+    const current = editDraftCommits.find((commit) => commit.commit === commitID)
+    if (!current || current.date === date) return
+    invalidateEditReview()
+    editDraftCommits = editDraftCommits.map((commit) => (
+      commit.commit === commitID ? { ...commit, date } : commit
+    ))
+  }
+
+  function editReviewChangeLabel(kind: CommitDraftChangeKind): string {
+    if (kind === 'reordered') return 'reordered'
+    if (kind === 'message') return 'message edited'
+    if (kind === 'author') return 'author edited'
+    return 'author date edited'
+  }
+
+  async function reviewEditDraft(): Promise<void> {
+    if (!repository || !canReviewEditDraft) return
+    if (!editTargetBranch) {
+      rejectEditReview('GitGit could not identify the branch to review. Exit Edit Mode and start a new draft.')
+      return
+    }
+    if (currentWorktreeDetached || !repository.branch) {
+      rejectEditReview('Review needs a worktree with the target branch checked out.')
+      return
+    }
+    if (repository.branch !== editTargetBranch) {
+      rejectEditReview(editTargetsDefaultBranch
+        ? `All branches uses default branch ${editTargetBranch}. Open its attached worktree, then enter Edit Mode again.`
+        : `Review needs the checked-out branch ${repository.branch}. Exit Edit Mode and choose that branch first.`)
+      return
+    }
+    if (filterRules.length > 0) {
+      rejectEditReview('Review needs the unfiltered branch history so the rewrite range can be verified exactly.')
+      return
+    }
+
+    const projection = editTargetDraftProjection
+    if (!projection.ok) {
+      rejectEditReview(reviewDraftMismatchMessage(projection.reason))
+      return
+    }
+    const anchorIndex = oldestAffectedOriginalIndex(editRewriteOriginalCommits, projection.commits)
+    if (anchorIndex === null) {
+      rejectEditReview(editTargetsDefaultBranch
+        ? 'The draft does not change default-branch order or metadata. Move a default-branch commit relative to another default-branch commit, or edit its metadata.'
+        : 'The local draft is not a valid commit permutation. Exit Edit Mode and start a new draft.')
+      return
+    }
+    const anchor = editRewriteOriginalCommits[anchorIndex]
+    if (!anchor) {
+      rejectEditReview('GitGit could not identify the oldest changed commit for review.')
+      return
+    }
+
+    const requestID = ++editReviewRequestID
     const repositoryRoot = repository.root
-    commitEditorApplying = true
-    commitEditorError = ''
+    const fingerprint = editDraftFingerprint
+    editReviewing = true
+    editReviewError = ''
+    editReviewStack = null
+    editApprovalConfirmed = false
+    try {
+      const stack = await api.prepareCommitEdit(anchor.commit, editTargetBranch)
+      if (
+        requestID !== editReviewRequestID
+        || !editModeOpen
+        || repository?.root !== repositoryRoot
+        || editDraftFingerprint !== fingerprint
+      ) return
+      const currentProjection = editTargetDraftProjection
+      if (!currentProjection.ok) {
+        rejectEditReview(reviewDraftMismatchMessage(currentProjection.reason))
+        return
+      }
+      const draft = deriveRewriteStackDraft(editRewriteOriginalCommits, currentProjection.commits, stack.commits)
+      if (!draft.ok) {
+        rejectEditReview(reviewDraftMismatchMessage(draft.reason))
+        return
+      }
+      editReviewStack = stack
+      editReviewFingerprint = fingerprint
+      setStatus('Rewrite review complete. Approve the local rewrite before applying it.', 'success')
+    } catch (error) {
+      if (requestID === editReviewRequestID && repository?.root === repositoryRoot) {
+        rejectEditReview(errorText(error))
+      }
+    } finally {
+      if (requestID === editReviewRequestID) editReviewing = false
+    }
+  }
+
+  function rejectEditReview(message: string): void {
+    editReviewStack = null
+    editReviewFingerprint = ''
+    editApprovalConfirmed = false
+    editReviewError = message
+    setStatus(message, 'warning')
+  }
+
+  function reviewDraftMismatchMessage(reason: string): string {
+    if (reason === 'changed-commit-outside-target-chain') {
+      return 'All branches Edit Mode only rewrites the default branch. Other branch commits stay read-only.'
+    }
+    if (reason === 'visible-target-chain-mismatch') {
+      return 'The visible All branches rows do not contain the default branch HEAD range. Refresh history and start a new draft.'
+    }
+    if (reason === 'draft-target-chain-mismatch') {
+      return 'The default branch draft is no longer a valid commit permutation. Exit Edit Mode and start a new draft.'
+    }
+    if (reason === 'stack-is-not-visible-head-range') {
+      return editTargetsDefaultBranch
+        ? 'The default branch history includes commits outside its verified first-parent range. Review cannot safely build a rewrite plan.'
+        : 'The visible rows do not match the checked-out branch HEAD range. Review cannot safely build a rewrite plan.'
+    }
+    if (reason === 'draft-crosses-rewrite-range' || reason === 'changes-outside-rewrite-range') {
+      return 'The draft crosses commits outside the verified rewrite range. Exit Edit Mode and review a single branch range.'
+    }
+    if (reason === 'empty-stack') return 'The selected rewrite range is empty.'
+    return 'The visible draft cannot be matched to a safe rewrite range.'
+  }
+
+  async function applyEditDraft(): Promise<void> {
+    const stack = editReviewStack
+    if (!repository || !stack || !canApplyEditDraft) return
+    const projection = editTargetDraftProjection
+    if (!projection.ok) {
+      rejectEditReview(reviewDraftMismatchMessage(projection.reason))
+      return
+    }
+    const draft = deriveRewriteStackDraft(editRewriteOriginalCommits, projection.commits, stack.commits)
+    if (!draft.ok) {
+      rejectEditReview(reviewDraftMismatchMessage(draft.reason))
+      return
+    }
+
+    const repositoryRoot = repository.root
+    const request: RewriteCommitsRequest = {
+      branch: stack.branch,
+      expected_head: stack.head,
+      base: stack.base,
+      confirm_default_branch: stack.default_branch_target && editApprovalConfirmed,
+      append_rewrite_provenance: false,
+      rewrite_provenance_note: '',
+      commits: draft.commits.map((commit) => {
+        const original = editRewriteOriginalCommits.find((candidate) => candidate.commit === commit.commit)
+        const authorChanged = original
+          && (original.author.name !== commit.author.name || original.author.email !== commit.author.email)
+        const dateChanged = original && original.date !== commit.date
+        return {
+          commit: commit.commit,
+          message: commit.message,
+          ...(authorChanged ? { author: { ...commit.author } } : {}),
+          ...(dateChanged ? { author_date: commit.date } : {}),
+        }
+      }),
+    }
+
+    editApplying = true
+    editReviewError = ''
     try {
       const result = await api.rewriteCommits(request)
       if (repository?.root !== repositoryRoot) return
       repository = result.state
-      commitEditorOpen = false
-      commitEditorStack = null
       selectedCommit = result.head
       historyDetail = null
       detailOverride = null
+      resetEditMode()
       await loadHistory()
       if (repository?.root !== repositoryRoot) return
       const rewriteStatus = `Commit history rewritten · backup ${result.backup_ref}`
       if (result.warning) setStatus(`${rewriteStatus} · ${result.warning}`, 'warning')
-      else if (!statusMessage) setStatus(rewriteStatus, 'success')
+      else setStatus(rewriteStatus, 'success')
     } catch (error) {
-      if (repository?.root === repositoryRoot) commitEditorError = errorText(error)
+      if (repository?.root === repositoryRoot) {
+        editReviewError = errorText(error)
+        setStatus(editReviewError, 'error')
+      }
     } finally {
-      commitEditorApplying = false
+      editApplying = false
     }
   }
+
 
   async function selectCommit(commit: CommitSummary): Promise<void> {
     if (selectedCommit === commit.commit && historyDetail) return
@@ -570,7 +946,7 @@
   }
 
   async function chooseRepository(): Promise<void> {
-    if (repositoryTransitioning) return
+    if (repositoryTransitioning || blockRepositoryActionDuringEdit()) return
     if (!api.available()) {
       setStatus('Desktop bridge unavailable. Run GitGit with Wails.', 'error')
       return
@@ -590,7 +966,7 @@
   }
 
   async function selectProject(project: RegisteredProject): Promise<void> {
-    if (repositoryTransitioning || (project.root === activeProjectRoot && repository)) return
+    if (repositoryTransitioning || blockRepositoryActionDuringEdit() || (project.root === activeProjectRoot && repository)) return
     const requestID = beginRepositoryTransition()
     try {
       const state = await api.openRepository(project.root)
@@ -622,12 +998,7 @@
     pulling = false
     refreshing = false
     projectSwitching = true
-    commitEditorRequestID++
-    commitEditorOpen = false
-    commitEditorStack = null
-    commitEditorLoading = false
-    commitEditorApplying = false
-    commitEditorError = ''
+    resetEditMode()
     setStatus('Switching project…')
     return requestID
   }
@@ -640,7 +1011,7 @@
     searchRequestID++
     syncRequestID++
     pullRequestID++
-    commitEditorRequestID++
+    resetEditMode()
     if (searching) void api.cancelSearch()
     historyLoading = false
     historyLoadingMore = false
@@ -650,11 +1021,6 @@
     pulling = false
     refreshing = false
     worktreeSwitching = true
-    commitEditorOpen = false
-    commitEditorStack = null
-    commitEditorLoading = false
-    commitEditorApplying = false
-    commitEditorError = ''
     setStatus('Switching worktree…')
     return requestID
   }
@@ -852,7 +1218,7 @@
   }
 
   async function refreshRepository(): Promise<void> {
-    if (!repository || refreshing || syncing || pulling) return
+    if (!repository || refreshing || syncing || pulling || blockRepositoryActionDuringEdit()) return
     const repositoryRoot = repository.root
     refreshing = true
     try {
@@ -868,7 +1234,7 @@
   }
 
   async function syncRemotes(): Promise<void> {
-    if (!repository || syncing || pulling) return
+    if (!repository || syncing || pulling || blockRepositoryActionDuringEdit()) return
     const requestID = ++syncRequestID
     const repositoryRoot = repository.root
     syncing = true
@@ -890,7 +1256,7 @@
   }
 
   async function pullCurrentBranch(): Promise<void> {
-    if (!repository || pulling || syncing) return
+    if (!repository || pulling || syncing || blockRepositoryActionDuringEdit()) return
     const requestID = ++pullRequestID
     const repositoryRoot = repository.root
     pulling = true
@@ -912,7 +1278,7 @@
   }
 
   async function selectWorktree(worktree: WorktreeInfo): Promise<void> {
-    if (repositoryTransitioning || worktree.path === repository?.root) return
+    if (repositoryTransitioning || blockRepositoryActionDuringEdit() || worktree.path === repository?.root) return
     const projectRoot = repository?.project_root || activeProjectRoot
     const requestID = beginWorktreeTransition()
     try {
@@ -1053,6 +1419,10 @@
   }
 
   async function changeNavigatorView(nextView: NavigatorView): Promise<void> {
+    if (editModeOpen && nextView !== 'commit') {
+      blockRepositoryActionDuringEdit()
+      return
+    }
     if (navigatorView === 'search') storeActiveSearchSession()
     if (nextView !== 'search') {
       navigatorView = nextView
@@ -1068,6 +1438,7 @@
   }
 
   async function selectSearchSession(id: string, force = false): Promise<void> {
+    if (blockRepositoryActionDuringEdit()) return
     if (!force && id === activeSearchSessionID) return
     const previousSessionID = activeSearchSessionID
     if (navigatorView === 'search' && activeSearchSessionID) storeActiveSearchSession()
@@ -1531,6 +1902,7 @@
     {syncing}
     {pulling}
     transitioning={repositoryTransitioning}
+    editMode={editModeOpen}
     view={navigatorView}
     onRegisterProject={() => void chooseRepository()}
     onSelectProject={(project) => void (navigatorView === 'search' ? selectSearchProject(project) : selectProject(project))}
@@ -1560,17 +1932,111 @@
           presets={appSettings.presets}
           {activePresetIDs}
           author={repository?.user ?? { name: '', email: '' }}
-          disabled={!repository || historyLoading || repositoryTransitioning}
-          {canEditCommits}
-          {editDisabledReason}
+          disabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing}
+          editMode={editModeOpen}
           onScopeChange={(nextScope, nextAllBranches) => void changeHistoryScope(nextScope, nextAllBranches)}
           onWorktreeChange={(worktree) => void selectWorktree(worktree)}
-          onOpenCommitEditor={() => void openCommitEditor()}
-          onOpenWorktree={() => void openCurrentWorktree()}
-          onOpenWorktreeInTerminal={() => void openCurrentWorktreeInTerminal()}
-          onOpenWorktreeInIDE={() => void openCurrentWorktreeInIDE()}
           onTogglePreset={togglePreset}
         />
+
+        {#if editModeOpen}
+          <section
+            class:review-ready={editReviewIsCurrent && editReviewStack}
+            class:reviewing={editReviewing || editApplying}
+            class="edit-mode-review-sheet"
+            aria-label="Edit Mode review"
+          >
+            <div class="edit-mode-review-rail">
+              <div class="edit-mode-review-title">
+                <strong><span aria-hidden="true">✎</span> Edit Mode</strong>
+                <span class="edit-mode-review-state" role="status" aria-live="polite">
+                  {#if editApplying}
+                    Applying the approved local rewrite…
+                  {:else if editReviewing}
+                    Reviewing the rewrite range…
+                  {:else if editReviewIsCurrent && editReviewStack}
+                    Review ready for <code>{editReviewStack.branch}</code>
+                  {:else if !editHasChanges}
+                    {editTargetsDefaultBranch
+                      ? `Targeting default branch ${editTargetBranch}. Make a change to review it.`
+                      : 'Make a change, then review it before applying.'}
+                  {:else}
+                    {editChangedCommitIDs.length} local change{editChangedCommitIDs.length === 1 ? '' : 's'} pending review
+                  {/if}
+                </span>
+              </div>
+
+              <button
+                class="edit-mode-review-button review"
+                type="button"
+                on:click={() => void reviewEditDraft()}
+                disabled={!canReviewEditDraft}
+                title={editReviewIsCurrent ? 'Run the branch and range checks again' : 'Review the target branch and rewrite range'}
+              >{editReviewing ? 'Reviewing…' : editReviewIsCurrent ? 'Review again' : 'Review'}</button>
+            </div>
+
+            {#if editReviewIsCurrent && editReviewStack}
+              <div class="edit-mode-review-details">
+                <div class="edit-mode-review-facts" aria-label="Rewrite review summary">
+                  <div>
+                    <span>Target</span>
+                    <strong><code>{editReviewStack.branch}</code>{#if editReviewStack.default_branch_target}<small>Default branch</small>{/if}</strong>
+                  </div>
+                  <div>
+                    <span>Verified range</span>
+                    <strong><code>{editReviewStack.base.slice(0, 8)}</code><i aria-hidden="true">→</i><code>{editReviewStack.head.slice(0, 8)}</code></strong>
+                  </div>
+                  <div>
+                    <span>Rewrite effect</span>
+                    <strong>{editReviewStack.commits.length} commit hash{editReviewStack.commits.length === 1 ? '' : 'es'} will change</strong>
+                  </div>
+                </div>
+
+                <div class="edit-mode-review-changes">
+                  <div class="edit-mode-review-section-heading">
+                    <strong>Your changes</strong>
+                    <span>{editDirectReviewChangeCount} direct edit{editDirectReviewChangeCount === 1 ? '' : 's'} · {editDependentReplacementCount} dependent replacement{editDependentReplacementCount === 1 ? '' : 's'}</span>
+                  </div>
+                  <ul>
+                    {#each editReviewVisibleChanges as change (change.commit.commit)}
+                      <li>
+                        <span class="edit-mode-review-change-message" title={change.commit.message}>{change.commit.message}</span>
+                        <span class="edit-mode-review-change-kinds">{change.kinds.map(editReviewChangeLabel).join(' · ')}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                  {#if editReviewHiddenChangeCount > 0}
+                    <p class="edit-mode-review-more">+ {editReviewHiddenChangeCount} more direct change{editReviewHiddenChangeCount === 1 ? '' : 's'}</p>
+                  {/if}
+                </div>
+
+                <p class="edit-mode-review-note">This rewrites local history only. Push is separate.</p>
+
+                {#if editReviewError}
+                  <p class="edit-mode-review-error" role="alert">{editReviewError}</p>
+                {/if}
+
+                <div class="edit-mode-review-approval-row">
+                  <label class:default-branch={editReviewStack.default_branch_target} class="edit-mode-approval">
+                    <input type="checkbox" bind:checked={editApprovalConfirmed} disabled={editApplying} />
+                    <span>{editReviewStack.default_branch_target ? 'I understand this rewrites default-branch history.' : `I approve rewriting ${editReviewStack.branch}.`}</span>
+                  </label>
+                  <button
+                    class="edit-mode-review-button apply"
+                    type="button"
+                    on:click={() => void applyEditDraft()}
+                    disabled={!canApplyEditDraft}
+                    title={editApprovalConfirmed
+                      ? 'Apply the reviewed local rewrite'
+                      : 'Confirm the rewrite acknowledgement before applying'}
+                  >{editApplying ? 'Applying…' : `Apply ${editReviewStack.commits.length} commit${editReviewStack.commits.length === 1 ? '' : 's'}`}</button>
+                </div>
+              </div>
+            {:else if editReviewError}
+              <p class="edit-mode-review-error compact" role="alert">{editReviewError}</p>
+            {/if}
+          </section>
+        {/if}
 
         <CommitTable
           commits={history.commits}
@@ -1588,9 +2054,14 @@
           hasMore={history.commits.length < history.total}
           autoLoad={historyAutoLoadEnabled}
           branchPoint={history.branch_point ?? ''}
-          onSelect={(commit) => void selectCommit(commit)}
+          onSelect={(commit) => editModeOpen ? chooseEditCommit(commit) : void selectCommit(commit)}
           onLoadMore={() => void loadMoreHistoryForCurrentFilters()}
           onSearchMessage={(message) => void addPatternSearch('msg', message)}
+          editMode={editModeOpen}
+          editCommits={editDraftCommits}
+          editableCommitIDs={editTargetCommitIDs}
+          {editMovedCommitIDs}
+          onEditMove={moveEditCommit}
         />
       </section>
 
@@ -1604,6 +2075,25 @@
         remotes={repository?.remotes ?? []}
         defaultBranch={repository?.default_branch ?? ''}
         upstream={repository?.upstream ?? ''}
+        editMode={editModeOpen}
+        editDraftMessage={selectedEditCommit?.message ?? null}
+        editDraftAuthor={selectedEditCommit?.author ?? null}
+        editDraftDate={selectedEditCommit?.date ?? null}
+        editDraftLocked={editReviewing || editApplying}
+        willChange={editWillChangeCommitIDs.includes(selectedCommit)}
+        onEditMessage={(message) => updateEditCommitMessage(selectedCommit, message)}
+        onEditAuthor={(author) => updateEditCommitAuthor(selectedCommit, author)}
+        onEditDate={(date) => updateEditCommitDate(selectedCommit, date)}
+        {canEditCommits}
+        {editDisabledReason}
+        editModeActionDisabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing || editReviewing || editApplying}
+        onEnterEditMode={startEditMode}
+        onExitEditMode={requestExitEditMode}
+        showWorktreeActions={true}
+        worktreeActionsDisabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing || editModeOpen}
+        onOpenCurrentWorktree={() => void openCurrentWorktree()}
+        onOpenCurrentWorktreeInTerminal={() => void openCurrentWorktreeInTerminal()}
+        onOpenCurrentWorktreeInIDE={() => void openCurrentWorktreeInIDE()}
         onOpenFinder={(path) => void revealFile(path)}
         onOpenTerminal={(path) => void openInTerminal(path)}
         onOpenExternalURL={(url) => void openExternalURL(url)}
@@ -1742,14 +2232,4 @@
       </div>
     </div>
   {/if}
-  <CommitEditor
-    open={commitEditorOpen}
-    stack={commitEditorStack}
-    loading={commitEditorLoading}
-    applying={commitEditorApplying}
-    error={commitEditorError}
-    onClose={closeCommitEditor}
-    onLoadFile={loadCommitFileContent}
-    onApply={applyCommitRewrite}
-  />
 </main>

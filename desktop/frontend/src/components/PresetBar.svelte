@@ -5,6 +5,7 @@
   export let presets: CommitFilterPreset[] = []
   export let activeIDs: string[] = []
   export let author: Author = { name: '', email: '' }
+  export let disabled = false
   export let onToggle: (id: string) => void
 
   function description(preset: CommitFilterPreset): string {
@@ -19,7 +20,7 @@
       type="button"
       aria-pressed={activeIDs.includes(preset.id)}
       title={description(preset)}
-      disabled={presetUnavailable(preset, author)}
+      disabled={disabled || presetUnavailable(preset, author)}
       on:click={() => onToggle(preset.id)}
     >
       <span class="preset-button-state"></span>

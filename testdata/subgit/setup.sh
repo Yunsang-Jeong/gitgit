@@ -94,9 +94,9 @@ create_fixture() {
 			return
 		fi
 		if fixture_is_previous; then
-			die "$repo uses the previous 1,000-commit fixture; run 'make subgit-reset' once to rebuild the 100-commit fixture"
+			die "$repo uses the previous 1,000-commit fixture; run 'task fixture:reset' once to rebuild the 100-commit fixture"
 		fi
-		die "$repo already exists or differs from the managed fixture; run 'make subgit-reset' to rebuild it"
+		die "$repo already exists or differs from the managed fixture; run 'task fixture:reset' to rebuild it"
 	fi
 
 	mkdir -p "$repo"
