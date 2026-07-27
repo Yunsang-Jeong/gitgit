@@ -201,9 +201,10 @@
                     class:favorite={project.favorite}
                     class="settings-favorite-button"
                     type="button"
+                    aria-pressed={project.favorite}
                     on:click={() => onToggleFavorite(project)}
                     aria-label={project.favorite ? `Remove ${project.name} from favorites` : `Add ${project.name} to favorites`}
-                  ><span>{project.favorite ? '★' : '☆'}</span>Favorite</button>
+                  ><span aria-hidden="true">{project.favorite ? '★' : '☆'}</span>Favorite</button>
                   <button class="settings-project-remove-button" type="button" on:click={() => onUnregisterProject(project)}>Remove</button>
                 </span>
               </div>

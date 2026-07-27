@@ -105,8 +105,12 @@
     dateEditing = false
   }
 
-  function title(message: string): string {
+  function subject(message: string): string {
     return message.split('\n')[0]
+  }
+
+  function body(message: string): string {
+    return message.slice(subject(message).length).replace(/^\n+/, '').trimEnd()
   }
 
   function containingBranches(value: CommitDetail | SearchResult | null): string[] | undefined {
@@ -119,6 +123,16 @@
 
   function fileLabel(file: FileChange): string {
     return file.old_path ? `${file.old_path} → ${file.path}` : file.path
+  }
+
+  function labelHead(label: string): string {
+    const cut = label.lastIndexOf('/')
+    return cut >= 0 ? label.slice(0, cut + 1) : ''
+  }
+
+  function labelTail(label: string): string {
+    const cut = label.lastIndexOf('/')
+    return cut >= 0 ? label.slice(cut + 1) : label
   }
 
   function isSearchMatch(file: FileChange): boolean {
@@ -289,9 +303,10 @@
 
 <svelte:window on:keydown={handleWindowKeydown} on:mousedown={() => closeDiffPopover()} on:resize={() => closeDiffPopover()} />
 
-<aside class="inspector pane">
+<aside class:edit-mode={editMode} class="inspector pane">
   {#if showWorktreeActions}
-    <div class="inspector-worktree-toolbar" aria-label="Commit and worktree actions">
+    <div class="inspector-worktree-toolbar" aria-label="Current worktree actions">
+      <span class="inspector-worktree-scope">Worktree</span>
       <div class="inspector-worktree-actions">
         <button
           class:edit-mode-active={editMode}
@@ -301,10 +316,10 @@
           on:click={editMode ? onExitEditMode : onEnterEditMode}
           disabled={editModeActionDisabled || (!editMode && !canEditCommits)}
           title={editMode ? 'Exit Edit Mode and discard this local reorder draft' : editDisabledReason || 'Enter Edit Mode for the visible history'}
-        ><span aria-hidden="true">✎</span><span>{editMode ? 'Exit Edit Mode' : 'Edit Mode'}</span></button>
-        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktree} disabled={worktreeActionsDisabled} title="Open the current worktree in Finder" aria-label="Open current worktree in Finder"><span aria-hidden="true">▱</span><span>Open Finder</span></button>
-        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktreeInTerminal} disabled={worktreeActionsDisabled} title="Open the current worktree in Terminal" aria-label="Open current worktree in Terminal"><span aria-hidden="true">⌘</span><span>Open Terminal</span></button>
-        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktreeInIDE} disabled={worktreeActionsDisabled} title="Open the current worktree in the configured IDE" aria-label="Open current worktree in IDE"><span aria-hidden="true">↗</span><span>Open IDE</span></button>
+        ><span aria-hidden="true">✎</span><span>{editMode ? 'Exit Edit' : 'Edit Mode'}</span></button>
+        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktree} disabled={worktreeActionsDisabled} title="Open the current worktree in Finder" aria-label="Open current worktree in Finder"><span aria-hidden="true">▱</span><span>Finder</span></button>
+        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktreeInTerminal} disabled={worktreeActionsDisabled} title="Open the current worktree in Terminal" aria-label="Open current worktree in Terminal"><span aria-hidden="true">⌘</span><span>Terminal</span></button>
+        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktreeInIDE} disabled={worktreeActionsDisabled} title="Open the current worktree in the configured IDE" aria-label="Open current worktree in IDE"><span aria-hidden="true">↗</span><span>IDE</span></button>
       </div>
     </div>
   {/if}
@@ -362,12 +377,14 @@
             ></textarea>
           {:else}
             <button class="copy-layer copy-heading commit-message-edit-trigger" type="button" title="Edit commit message" on:click={() => void beginCommitMessageEdit()} disabled={editDraftLocked}>
-              <h2 class="copy-target">{title(editDraftMessage)}</h2>
+              <h2 class="copy-target commit-message-subject">{subject(editDraftMessage)}</h2>
+              {#if body(editDraftMessage)}<span class="commit-message-body">{body(editDraftMessage)}</span>{/if}
             </button>
           {/if}
         {:else}
           <button class="copy-layer copy-heading" type="button" title="Copy commit message" on:click={() => void copyLayer(selected.message, 'Commit message')}>
-            <h2 class="copy-target">{title(selected.message)}</h2>
+            <h2 class="copy-target commit-message-subject">{subject(selected.message)}</h2>
+            {#if body(selected.message)}<span class="commit-message-body">{body(selected.message)}</span>{/if}
           </button>
         {/if}
         {#if isMergeCommit}<span class="merge-commit-badge">Merge</span>{/if}
@@ -447,7 +464,7 @@
               aria-expanded={diffFile?.path === file.path}
             >
               <span class="file-status status-{file.status[0]?.toLowerCase()}">{file.status[0]}</span>
-              <span class="copy-target" title={fileLabel(file)}>{fileLabel(file)}</span>
+              <span class="copy-target changed-file-path" title={fileLabel(file)}><span class="changed-file-path-head">{labelHead(fileLabel(file))}</span><span class="changed-file-path-tail">{labelTail(fileLabel(file))}</span></span>
               {#if isSearchMatch(file)}<small class="search-file-match">Match</small>{/if}
             </button>
           {/each}

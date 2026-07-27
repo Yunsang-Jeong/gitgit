@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: search
-last_updated: 2026-07-22
+last_updated: 2026-07-28
 ---
 
 # Search Module
@@ -20,7 +20,7 @@ Search는 commit history 전체를 scan할 수 있는 비교적 비용이 큰 �
 
 ## Search session
 
-Search 화면에 들어가는 것만으로 session을 만들지 않는다. 처음에는 empty state를 표시하며 좌측 sidebar 또는 본문의 `+` 버튼을 눌렀을 때만 session을 만든다. Session alias는 sidebar에서 바로 수정할 수 있고 `×`로 삭제한다. Sidebar는 project, query, status와 실행 시각을 한눈에 비교할 수 있도록 유지하되 결과 조사 공간을 침범하지 않도록 compact width와 72px session row를 사용한다. Inspector 공간이 더 필요하면 sidebar를 40px reopen rail로 접을 수 있다.
+Search 화면에 들어가는 것만으로 session을 만들지 않는다. 처음에는 empty state를 표시하며 좌측 sidebar 또는 본문의 `+` 버튼을 눌렀을 때만 session을 만든다. Sidebar 제목은 Commit 화면의 history와 혼동되지 않도록 `Sessions`를 사용한다. Session alias는 sidebar에서 바로 수정할 수 있고 `×`로 삭제한다. Sidebar는 project, query, status와 실행 시각을 한눈에 비교할 수 있도록 유지하되 결과 조사 공간을 침범하지 않도록 compact width와 72px session row를 사용한다. Inspector 공간이 더 필요하면 sidebar를 40px reopen rail로 접을 수 있다.
 
 현재 status는 다음 중 하나다. 검색 전 session에는 불필요한 `draft` badge를 붙이지 않는다.
 
@@ -59,6 +59,8 @@ Backend는 한 번에 하나의 active search만 실행한다. 다른 session으
 - **Branch**: checkout 없이 revision scope만 선택한다.
 - **All branches**: UI의 branch scope 이름이다. Backend search request에서는 `All refs`로 실행된다.
 
+Revision scope는 toolbar의 Branch selector 하나만 제어한다. 같은 값을 다른 이름(`All branches` / `All refs`)으로 두 번 노출하지 않도록 composer의 filter row에는 별도 Scope 입력을 두지 않는다.
+
 Project나 Worktree를 변경하면 기존 결과는 버리고 query만 새 대상에 맞게 유지한다. 새 대상의 checked-out branch를 초기 scope로 사용한다.
 
 ## Query condition
@@ -71,7 +73,7 @@ Condition source는 세 가지다.
 
 Query composer는 condition row를 여러 개 쌓는 visual builder가 아니라 하나의 Expression input을 사용한다. 각 condition은 `MSG:`, `DIFF:`, `FILE:` source prefix로 시작하고 `AND` 또는 `OR`로 연결한다. 괄호를 직접 입력해 우선순위를 표현하며 한 condition 앞뒤에는 각각 최대 8개 group boundary를 둘 수 있다. 공백, `AND`/`OR` 또는 괄호를 literal value로 검색해야 하면 single/double quote로 value를 감싼다.
 
-Expression 아래 helper는 빈 입력에서 source와 operator 사용법을 안내하고, 입력 중에는 누락된 colon, value, 다음 source와 닫는 괄호 같은 구문 오류를 즉시 표시한다. Valid expression에는 condition 수, Glob/Regex hint, Enter 실행 방법 또는 현재 결과와의 stale/applied 상태를 표시한다. 별도의 condition chip summary는 중복 표시하지 않는다. Engine, Scope, Author, Since, Until은 동일 너비의 5-column grid로 정렬하며 sidebar와 main panel은 같은 outer gutter를 사용한다. Search action 우측의 화살표 control로 composer 전체를 접어 결과와 Inspector에 세로 공간을 돌려줄 수 있고, 접어도 작성 중인 expression과 scope는 유지한다.
+Expression 아래 helper는 빈 입력에서 source와 operator 사용법을 안내하고, 입력 중에는 누락된 colon, value, 다음 source와 닫는 괄호 같은 구문 오류를 즉시 표시한다. Valid expression에는 condition 수, Glob/Regex hint, Enter 실행 방법 또는 현재 결과와의 stale/applied 상태를 표시한다. 별도의 condition chip summary는 중복 표시하지 않는다. Engine, Author, Since, Until은 동일 너비 grid로 정렬하며 sidebar와 main panel은 같은 outer gutter를 사용한다. Search action 우측의 화살표 control로 composer 전체를 접어 결과와 Inspector에 세로 공간을 돌려줄 수 있고, 접어도 작성 중인 expression과 scope는 유지한다.
 
 괄호가 없으면 AND가 OR보다 먼저 평가되며, group이 있으면 해당 범위가 우선한다. Frontend와 backend는 생성된 expression을 모두 검증한다.
 
@@ -138,13 +140,14 @@ Backend match는 file 단위지만 UI는 같은 commit의 match를 한 행으로
 ```
 
 - Commit당 한 행
-- 여러 match source는 한 행의 badge로 합침
+- 여러 match source는 한 행의 badge로 합침. Match column은 고정 폭이 아니라 badge 내용에 맞춰 넓어지므로 `Message`, `DIFF`, `FILE`이 모두 붙어도 잘리지 않음
 - Result table은 topology graph와 File column을 표시하지 않음
 - Result table은 별도 column header와 내부 grid separator 없이 Commit 화면과 같은 32px row 높이를 사용
 - Branch/ref 정보는 Message와 같은 행의 작은 badge로 표시
 - 선택한 commit은 우측 Inspector에서 metadata, 전체 changed files와 file diff를 확인
 - FILE/DIFF가 실제로 일치한 file만 Inspector에서 `Match`로 표시하고 Message-only match는 모든 changed file을 match로 표시하지 않음
 - Status bar에는 scanned commit 수와 matching commit 수를 표시
+- Result table은 Commit table과 같은 ARIA table 구조와 roving tabindex, 방향키 이동 규칙을 사용
 
 현재 request limit은 file-level match 250개다. 매우 많은 file이 match하는 commit은 이 limit을 빠르게 사용할 수 있으므로 결과가 repository 전체의 exhaustive count라고 가정해서는 안 된다.
 

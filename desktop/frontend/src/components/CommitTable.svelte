@@ -1,7 +1,7 @@
 <script lang="ts">
   import { flip } from 'svelte/animate'
   import { cubicOut } from 'svelte/easing'
-  import { onDestroy, onMount } from 'svelte'
+  import { onDestroy, onMount, tick } from 'svelte'
   import ContextMenu from './ContextMenu.svelte'
   import RemoteBadgeIcon from './RemoteBadgeIcon.svelte'
   import { buildCommitGraph, defaultBranchGraphColorIndex, hasPrimaryBranchHead, isLocalPrimaryBranchHead, projectVisibleCommits } from '../lib/commit-graph'
@@ -53,6 +53,7 @@
   let suppressEditClickUntil = 0
   let editReordering = false
   let editReorderTimer: ReturnType<typeof setTimeout> | undefined
+  let focusedCommitID = ''
 
   const editRowFlip = { duration: 170, easing: cubicOut }
   const editPreviewHoldDistance = commitGraphRowHeight * 0.125
@@ -76,6 +77,7 @@
   $: graphDrawing = buildCommitGraphDrawing(visibleGraphCommits, graphLayout.rows, Boolean(visiblePrimaryBranch), historyRowGeometry.tops, historyRowGeometry.height)
   $: graphVersion = `${graphLaneLimit}|${visiblePrimaryBranch}|${localDefaultGraphLane}|${historyRows.map((row) => `${row.separator?.key ?? ''}:${row.commit.commit}:${(row.commit.parents ?? []).join(',')}`).join(';')}`
   $: editableEditCommitIDSet = new Set(editableCommitIDs)
+  $: activeRowIndex = resolveActiveRowIndex(historyRows, selectedCommit, focusedCommitID)
 
   onMount(() => {
     const observer = new ResizeObserver(([entry]) => {
@@ -98,10 +100,51 @@
     if (remaining <= target.clientHeight / 2) onLoadMore()
   }
 
-  function selectWithKeyboard(event: KeyboardEvent, commit: CommitSummary): void {
-    if (event.key !== 'Enter' && event.key !== ' ') return
+  function resolveActiveRowIndex(rows: typeof historyRows, selected: string, focused: string): number {
+    const bySelected = rows.findIndex((row) => row.commit.commit === selected)
+    if (bySelected >= 0) return bySelected
+    const byFocus = rows.findIndex((row) => row.commit.commit === focused)
+    return byFocus >= 0 ? byFocus : 0
+  }
+
+  function presentedCommitFor(commit: CommitSummary): CommitSummary {
+    const historicalBranch = fullGraphLayout.historicalBranches.get(commit.commit) ?? ''
+    return historicalBranch ? { ...commit, historical_branch: historicalBranch } : commit
+  }
+
+  function selectWithKeyboard(event: KeyboardEvent, index: number, commit: CommitSummary): void {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onSelect(commit)
+      return
+    }
+    moveRowFocus(event, index)
+  }
+
+  function moveRowFocus(event: KeyboardEvent, index: number): void {
+    const step = event.key === 'PageDown' || event.key === 'PageUp' ? 10 : 1
+    const last = historyRows.length - 1
+    let next = index
+    if (event.key === 'ArrowDown' || event.key === 'PageDown') next = Math.min(last, index + step)
+    else if (event.key === 'ArrowUp' || event.key === 'PageUp') next = Math.max(0, index - step)
+    else if (event.key === 'Home') next = 0
+    else if (event.key === 'End') next = last
+    else return
+
     event.preventDefault()
-    onSelect(commit)
+    if (next === index) return
+    const row = historyRows[next]
+    focusedCommitID = row.commit.commit
+    onSelect(presentedCommitFor(row.commit))
+    void tick().then(() => focusRow(next))
+  }
+
+  function focusRow(index: number): void {
+    const rows = commitTableElement?.querySelectorAll<HTMLElement>('.commit-row')
+    const row = rows?.[index]
+    if (!row) return
+    row.focus({ preventScroll: true })
+    row.scrollIntoView({ block: 'nearest' })
   }
 
   function beginEditDrag(event: DragEvent, commit: CommitSummary): void {
@@ -222,8 +265,8 @@
 </script>
 
 <div bind:this={commitTableElement} class:edit-mode={editMode} class:edit-reordering={editReordering} class="commit-table" role="table" aria-label={editMode ? 'Editable commit history' : 'Commit history'} style={`--graph-width: ${graphWidth}px; --commit-row-height: ${commitGraphRowHeight}px`}>
-  <div class="commit-table-scroll" on:scroll={handleScroll}>
-    <div class="commit-body">
+  <div class="commit-table-scroll" role="presentation" on:scroll={handleScroll}>
+    <div class="commit-body" role="rowgroup">
       {#if loading}
         <div class="history-empty"><span class="empty-spinner"></span><strong>Loading commit history…</strong></div>
       {:else if tableCommits.length === 0}
@@ -264,7 +307,7 @@
             {@const commit = historyRow.commit}
             {@const historicalBranch = fullGraphLayout.historicalBranches.get(commit.commit) ?? ''}
             {@const historicalBranchTip = fullGraphLayout.historicalBranchTips.get(commit.commit) ?? ''}
-            {@const presentedCommit = historicalBranch ? { ...commit, historical_branch: historicalBranch } : commit}
+            {@const presentedCommit = presentedCommitFor(commit)}
             {@const refSummary = summarizeRefBadges(commit.refs, remotes, remoteBadgeRules, showRemoteBadges, defaultBranch)}
             {@const primaryRef = refSummary.primary}
             {@const graphRow = graphLayout.rows.get(commit.commit)}
@@ -275,10 +318,10 @@
               : graphRow?.nodeOverflow
                 ? '#8d9da3'
                 : commitGraphLaneColor(graphRow?.nodeColor ?? defaultBranchGraphColorIndex)}
-            <div class="commit-row-motion" animate:flip={editRowFlip}>
+            <div class="commit-row-motion" role="presentation" animate:flip={editRowFlip}>
               {#if historyRow.separator}
-                <div class="history-date-separator" role="separator" aria-label={historyRow.separator.label}>
-                  <time>{historyRow.separator.label}</time><span></span>
+                <div class="history-date-separator" role="row" aria-label={historyRow.separator.label}>
+                  <span role="cell"><time>{historyRow.separator.label}</time></span><i aria-hidden="true"></i>
                 </div>
               {/if}
               <div
@@ -289,11 +332,13 @@
                 class:dragging={editableEditCommit && draggedEditCommit === commit.commit}
                 class="commit-row commit-grid"
                 role="row"
-                tabindex="0"
+                tabindex={editRowIndex === activeRowIndex ? 0 : -1}
                 aria-selected={selectedCommit === commit.commit}
                 draggable={editableEditCommit}
                 on:click={() => selectDisplayedCommit(presentedCommit)}
-                on:keydown={(event) => selectWithKeyboard(event, presentedCommit)}
+                on:contextmenu|preventDefault={(event) => openMessageMenu(event, presentedCommit)}
+                on:focus={() => (focusedCommitID = commit.commit)}
+                on:keydown={(event) => selectWithKeyboard(event, editRowIndex, presentedCommit)}
                 on:dragstart={(event) => beginEditDrag(event, presentedCommit)}
                 on:dragover={(event) => updateEditDropTarget(event, commit.commit)}
                 on:drop={(event) => commitEditDrop(event, commit.commit)}
@@ -316,13 +361,13 @@
                 </span>
                 <span class="graph-cell" role="cell" aria-label={`${(commit.parents ?? []).length} parents`}>
                 </span>
-                <button class:interaction-active={contextMenu?.target.commit === commit.commit && contextMenu.target.field === 'message'} class="history-data-cell history-message-cell context-action" type="button" role="cell" title={`${commit.message}\n\nSelect commit · Right-click for actions`} on:click|stopPropagation={() => selectDisplayedCommit(presentedCommit)} on:contextmenu|preventDefault|stopPropagation={(event) => openMessageMenu(event, presentedCommit)}>
+                <span class:interaction-active={contextMenu?.target.commit === commit.commit && contextMenu.target.field === 'message'} class="history-data-cell history-message-cell context-action" role="cell" title={`${commit.message}\n\nSelect commit · Right-click for actions`}>
                   <strong class="copy-target">{title(commit.message)}</strong>
                   {#if commit.commit === branchPoint}
                     <small class="branch-point" title="Common ancestor with the default branch">Branch point</small>
                   {/if}
                   <span class="history-author" title={commit.author.email ? `${commit.author.name} <${commit.author.email}>` : commit.author.name}>{commit.author.name || commit.author.email}</span>
-                </button>
+                </span>
               </div>
             </div>
           {/each}

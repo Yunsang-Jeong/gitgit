@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: overview
 scope: project
-last_updated: 2026-07-27
+last_updated: 2026-07-28
 ---
 
 # GitGit Overview
@@ -135,7 +135,7 @@ Release artifact는 현재 build를 실행하는 Mac의 architecture와 macOS 11
 
 ## 공통 경계
 
-- Application-wide shortcut은 Settings의 `Command+,`만 유지한다.
+- Application-wide shortcut은 Settings의 `Command+,`만 유지한다. Commit과 Search의 결과 목록은 focus가 목록 안에 있을 때만 동작하는 방향키 이동을 제공하며, 이는 application-wide shortcut으로 취급하지 않는다.
 - GitGit은 자동 push, force push 또는 remote branch 삭제를 수행하지 않는다.
 - Worktree 생성·이동과 sparse-checkout mutation은 아직 제공하지 않는다.
 - Search session persistence와 background search queue는 아직 제공하지 않는다.

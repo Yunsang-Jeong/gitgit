@@ -1915,9 +1915,9 @@
     onViewChange={(view) => void changeNavigatorView(view)}
   />
 
-  <div class:focus-mode={navigatorView !== 'commit'} class="workspace" style:--inspector-width={`${inspectorWidth}px`}>
+  <div class:edit-mode-active={editModeOpen} class:focus-mode={navigatorView !== 'commit'} class="workspace" style:--inspector-width={`${inspectorWidth}px`}>
     {#if navigatorView === 'commit'}
-      <section class="history-pane pane">
+      <section class:edit-mode={editModeOpen} class="history-pane pane">
         <HistoryToolbar
           scope={historyScope}
           allBranches={historyAllBranches}

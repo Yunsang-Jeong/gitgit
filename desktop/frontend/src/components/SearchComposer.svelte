@@ -4,8 +4,6 @@
 
   export let patterns: Pattern[] = []
   export let engine = 'glob'
-  export let scope = 'HEAD'
-  export let allRefs = false
   export let author = ''
   export let since = ''
   export let until = ''
@@ -39,11 +37,6 @@
     if (event.key !== 'Enter') return
     event.preventDefault()
     if (!queryError && patterns.length > 0) onSearch()
-  }
-
-  function changeScope(event: Event): void {
-    scope = (event.currentTarget as HTMLInputElement).value
-    allRefs = scope.trim().toLocaleLowerCase() === 'all refs'
   }
 </script>
 
@@ -89,14 +82,6 @@
         <option value="glob">Glob</option>
         <option value="regex">Regex</option>
       </select>
-    </label>
-    <label>
-      <span>Scope</span>
-      <input class="scope-input" value={scope} on:input={changeScope} list="scope-options" placeholder="HEAD or revision" />
-      <datalist id="scope-options">
-        <option value="HEAD"></option>
-        <option value="All refs"></option>
-      </datalist>
     </label>
     <label>
       <span>Author</span>

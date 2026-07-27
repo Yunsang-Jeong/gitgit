@@ -200,6 +200,8 @@
             main
             selected={false}
             onToggle={setWorktreeSelected}
+            {onView}
+            {onOpen}
             {onOpenIDE}
           />
         {/each}
@@ -215,7 +217,10 @@
               {worktree}
               defaultBranch={repository.default_branch}
               selected={selectedPaths.includes(worktree.path)}
+              impliedMergeState
               onToggle={setWorktreeSelected}
+              {onView}
+              {onOpen}
               {onOpenIDE}
             />
           {/each}
@@ -234,7 +239,10 @@
               {worktree}
               defaultBranch={repository.default_branch}
               selected={selectedPaths.includes(worktree.path)}
+              impliedMergeState
               onToggle={setWorktreeSelected}
+              {onView}
+              {onOpen}
               {onOpenIDE}
             />
           {/each}

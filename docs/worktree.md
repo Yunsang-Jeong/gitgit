@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: worktree
-last_updated: 2026-07-23
+last_updated: 2026-07-28
 ---
 
 # Worktree Module
@@ -43,7 +43,11 @@ Worktree는 다음 group으로 나뉜다.
 - Clean 또는 Changes
 - Locked 상태
 - Sparse-checkout 활성화 여부
-- Default, Merged, Unmerged 상태
+- Default 상태
+
+Path는 앞의 directory 부분만 ellipsis로 줄이고 마지막 segment는 항상 끝까지 보여 준다. 여러 worktree가 같은 parent directory를 공유할 때 card를 구분하는 정보는 경로의 끝에 있기 때문이다.
+
+Merged와 Unmerged는 card badge로 반복하지 않는다. Card가 이미 해당 group 안에 있으므로 badge는 group에서 알 수 없는 정보인 `Default`, `Locked`, `Sparse`만 표시한다.
 
 Main worktree는 항상 먼저 표시하며 bulk-removal selection 대상이 아니다.
 
@@ -51,16 +55,19 @@ Main worktree는 항상 먼저 표시하며 bulk-removal selection 대상이 아
 
 Card click 또는 checkbox로 linked worktree를 선택한다. Shift-click은 현재 정렬된 card 범위에 selection을 적용한다.
 
-단일 선택 action:
+각 card의 footer에는 그 worktree만 대상으로 하는 **Commits**, **Finder**, **IDE**를 둔다. 선택 없이 바로 실행할 수 있으므로 단일 worktree를 열 때 상단 menu를 거치지 않는다.
+
+단일 선택 action(상단 `Actions` menu):
 
 - **View commits**: 해당 worktree를 active repository root로 열고 Commit 화면으로 이동한다.
 - **Open in Finder**: worktree directory를 Finder에서 연다.
-- **Open IDE**: 설정된 IDE로 directory를 연다.
 
 Bulk action:
 
 - **Remove worktrees & branches**: 선택 대상 전체가 검증을 통과한 경우에만 confirmation을 연다.
 - **Clear merged worktrees**: 현재 제거 가능한 모든 linked worktree를 대상으로 같은 confirmation을 연다.
+
+파괴적 action은 실제로 실행할 수 있을 때만 danger 색을 사용한다. 대상이 없어 disabled인 `Clear merged worktrees`는 중립 색으로 표시해 빈 상태에서 시선을 끌지 않는다.
 
 ## 제거 가능 조건
 

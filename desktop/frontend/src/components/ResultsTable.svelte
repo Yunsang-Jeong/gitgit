@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { formatDate } from '../lib/datetime'
   import { defaultFirstRefs } from '../lib/remotes'
   import type { SearchResult } from '../lib/types'
@@ -22,13 +23,43 @@
     return source === 'msg' ? 'Message' : source.toUpperCase()
   }
 
+  let rowsRoot: HTMLElement | undefined
+
   function selectResult(index: number): void {
     selectedIndex = index
     onSelect(index)
   }
+
+  function focusResultRow(index: number): void {
+    const row = rowsRoot?.querySelectorAll<HTMLElement>('.result-row')[index]
+    if (!row) return
+    row.focus({ preventScroll: true })
+    row.scrollIntoView({ block: 'nearest' })
+  }
+
+  function handleRowKeydown(event: KeyboardEvent, index: number): void {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      selectResult(index)
+      return
+    }
+    const step = event.key === 'PageDown' || event.key === 'PageUp' ? 10 : 1
+    const last = results.length - 1
+    let next = index
+    if (event.key === 'ArrowDown' || event.key === 'PageDown') next = Math.min(last, index + step)
+    else if (event.key === 'ArrowUp' || event.key === 'PageUp') next = Math.max(0, index - step)
+    else if (event.key === 'Home') next = 0
+    else if (event.key === 'End') next = last
+    else return
+
+    event.preventDefault()
+    if (next === index) return
+    selectResult(next)
+    void tick().then(() => focusResultRow(next))
+  }
 </script>
 
-<div class="results-table" role="table" aria-label="Search results">
+<div class="results-table">
   <div class="results-body">
     {#if error && results.length > 0}
       <div class="criteria-summary-bar filter-rules" role="alert">
@@ -73,14 +104,18 @@
         {/if}
       </div>
     {:else}
+      <div bind:this={rowsRoot} class="results-rows" role="table" aria-label="Search results">
+      <div role="rowgroup">
       {#each results as result, index}
         {@const refs = defaultFirstRefs(result.refs, defaultBranch)}
-        <button
+        <div
           class:selected={selectedIndex === index}
           class="result-row result-grid"
-          type="button"
           role="row"
+          tabindex={index === Math.max(selectedIndex, 0) ? 0 : -1}
+          aria-selected={selectedIndex === index}
           on:click={() => selectResult(index)}
+          on:keydown={(event) => handleRowKeydown(event, index)}
         >
           <span class="commit-cell" role="cell"><code>{result.short_commit}</code></span>
           <span class="message-cell" role="cell" title={result.message}>
@@ -99,8 +134,10 @@
               <b class="source-{source}">{sourceLabel(source)}</b>
             {/each}
           </span>
-        </button>
+        </div>
       {/each}
+      </div>
+      </div>
     {/if}
   </div>
 </div>

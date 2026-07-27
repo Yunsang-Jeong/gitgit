@@ -77,7 +77,7 @@
 <section class:sessions-collapsed={sessionSidebarCollapsed} class="search-workspace pane">
   <aside class:collapsed={sessionSidebarCollapsed} class="search-session-sidebar">
     <header>
-      <div class="search-session-heading"><strong>History</strong><span class="search-session-count">{sessions.length}</span></div>
+      <div class="search-session-heading"><strong>Sessions</strong><span class="search-session-count">{sessions.length}</span></div>
       <div class="search-session-sidebar-actions">
         <button
           class="search-session-collapse"
@@ -183,7 +183,7 @@
     </header>
 
     <div id="search-query-panel" class="search-session-query" hidden={queryCollapsed}>
-      <SearchComposer bind:patterns bind:engine bind:scope bind:allRefs bind:author bind:since bind:until bind:queryError={composerError} {stale} {applied} onSearch={onRunSearch} />
+      <SearchComposer bind:patterns bind:engine bind:author bind:since bind:until bind:queryError={composerError} {stale} {applied} onSearch={onRunSearch} />
     </div>
 
     <div class="search-results-layout" style:--search-inspector-width={`${inspectorWidth}px`}>

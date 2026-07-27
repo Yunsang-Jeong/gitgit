@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: commit
-last_updated: 2026-07-27
+last_updated: 2026-07-28
 ---
 
 # Commit Module
@@ -22,7 +22,7 @@ Commit module은 선택한 worktree를 기준으로 Git history를 읽고, 별�
 [Worktree: main]  [Branch: All branches]
 Preset   [My Jobs]  [3 Days]
 
-[✎ Edit Mode]  [▱ Open Finder]  [⌘ Open Terminal]  [↗ Open IDE]
+Worktree  [✎ Edit Mode]  [▱ Finder]  [⌘ Terminal]  [↗ IDE]
 Inspector  [Changes]  [Files]
 ```
 
@@ -32,7 +32,7 @@ Inspector  [Changes]  [Files]
 
 - **Worktree 선택**은 active repository root를 해당 checkout path로 바꾼다. Attached worktree는 checkout된 branch를, detached worktree는 `HEAD`를 초기 history scope로 사용한다.
 - **Branch 선택**은 active worktree를 바꾸거나 branch를 checkout하지 않는다. Commit table이 읽는 revision scope만 바꾼다.
-- Worktree와 Branch selector는 26px 높이의 가로 label/value control로 표시한다. Inspector 상단 action row에는 같은 너비의 **✎ Edit Mode**, **▱ Open Finder**, **⌘ Open Terminal**, **↗ Open IDE**를 둔다. 뒤 세 action은 선택된 commit이나 file이 아니라 현재 선택된 worktree root를 연다.
+- Worktree와 Branch selector는 26px 높이의 가로 label/value control로 표시한다. Inspector 위의 action row에는 같은 너비의 **✎ Edit Mode**, **▱ Finder**, **⌘ Terminal**, **↗ IDE**를 둔다. 뒤 세 action은 선택된 commit이나 file이 아니라 현재 선택된 worktree root를 연다. 이 row는 Inspector가 아니라 worktree를 대상으로 하므로 `Worktree` scope label을 앞에 두어 Inspector 내용과 구분한다.
 - **All branches**는 실제 `All`이라는 branch와 혼동하지 않도록 자연어 scope로 표시한다.
 
 Branch dropdown은 다음 규칙을 사용한다.
@@ -65,15 +65,17 @@ Preset이 활성화되면 이미 load된 commit만 검사하고 멈추지 않는
 
 ## Commit table과 Inspector
 
-Commit table은 별도 header와 cell border 없이 branch/ref badge, graph, subject 순서의 32px compact row로 표시한다. Commit hash와 date는 table에서 제거하고 Inspector에서 확인한다. Author는 message cell의 오른쪽 끝에 muted text로 표시하며, 자세한 email은 hover title과 Inspector에서 확인한다. Branch/ref badge는 graph 왼쪽의 고정 column에 두고 모든 primary badge를 같은 폭으로 표시하며 긴 이름은 ellipsis로 줄인다. Primary badge의 text, border와 background tint는 해당 commit node의 graph lane 색상을 사용한다. 단, exact local default branch badge와 primary graph lane은 graph palette와 구분되는 white beam treatment(밝은 백청색과 은은한 glow)을 사용하며 `origin/<default>`가 primary head인 remote default lane에는 적용하지 않는다. 표시할 ref가 여러 개면 default branch를 우선한 첫 badge와 중립색의 별도 고정 폭 `+N` badge만 노출한다. Remote badge를 숨기는 설정이 적용된 ref는 `N`에 포함하지 않는다. Merge source branch의 ref가 삭제됐어도 merge message에서 이름을 복원할 수 있으면 second-parent tip commit 한 곳에 같은 크기와 graph lane 색상의 historical branch badge를 표시한다. 해당 commit에 실제 ref가 남아 있으면 실제 ref badge를 우선한다. Graph는 load된 commit의 parent 관계를 표현하고 default branch lane을 가장 왼쪽에 유지한다. All branches에서는 local default branch가 뒤처져 있어도 `origin/<default>`를 primary head로 유지하고, local branch scope에서는 exact local head를 사용한다. Remote default branch의 node와 first-parent line은 첫 palette blue로 고정하며 side lineage의 생성, collapse 또는 merge가 이 색상을 덮어쓰지 않는다. Merge 교차점에서도 side path가 default path를 가리지 않도록 default path를 마지막에 조금 더 두껍게 그린다. Side path는 default node 중심에서 색이 바뀌는 것처럼 보이지 않도록 node의 오른쪽 경계에 연결한다. 종료된 lane의 오른쪽 lane은 빈 공간을 남기지 않고 왼쪽으로 collapse한다. Lane color는 현재 x 위치가 아니라 active commit lineage에 속하므로, 같은 lineage가 빈 lane을 메우기 위해 왼쪽으로 이동해도 색상을 유지한다. Commit table 폭에 비례해 실제 lane을 6개에서 10개까지 표시하되, message 영역을 더 침범하지 않도록 10개를 상한으로 둔다. 이 범위의 lane color는 반복하지 않는다. 상한을 넘는 topology는 마지막 중립색 dashed lane 하나로 collapse한다. 실제 lane과 overflow lane 사이의 연결선은 branch 색과 중립색 사이의 gradient를 사용해 색상 전환 위치를 보존한다.
+Commit table은 별도 header와 cell border 없이 branch/ref badge, graph, subject(첫 줄) 순서의 32px compact row로 표시한다. Commit hash와 date는 table에서 제거하고 Inspector에서 확인한다. Author는 message cell의 오른쪽 끝에 muted text로 표시하며, 자세한 email은 hover title과 Inspector에서 확인한다. Message cell은 최대 폭을 두어, 넓은 창에서 subject와 author 사이가 화면 폭만큼 벌어지지 않게 한다.
+
+Commit table은 ARIA table로 노출한다. Scroll container와 row wrapper는 `presentation`으로 두어 row가 rowgroup에 직접 속하게 하고, 날짜 구분선도 하나의 cell을 가진 row로 표시한다. Row 자체가 선택과 context menu를 담당하므로 message cell에는 중첩 button을 두지 않는다. Row는 roving tabindex를 사용해 목록 전체가 tab stop 하나만 차지하며, 목록 안에서는 `↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End`로 이동하고 이동한 row를 즉시 선택한다. `Enter`와 `Space`는 현재 row를 선택한다. Search 결과 table도 같은 규칙을 따른다. Branch/ref badge는 graph 왼쪽의 고정 column에 두고 모든 primary badge를 같은 폭으로 표시하며 긴 이름은 ellipsis로 줄인다. Primary badge의 text, border와 background tint는 해당 commit node의 graph lane 색상을 사용한다. 단, exact local default branch의 primary graph lane은 graph palette와 구분되는 white beam treatment(밝은 백청색과 은은한 glow)을 사용하며 `origin/<default>`가 primary head인 remote default lane에는 적용하지 않는다. Badge 자체는 이 glow를 쓰지 않는다. 고정 폭 badge에 gradient와 glow를 함께 적용하면 text input처럼 읽히므로, local default badge도 다른 badge와 같은 flat tint에 밝은 백청색 border와 text만 사용한다. 표시할 ref가 여러 개면 default branch를 우선한 첫 badge와 중립색의 별도 고정 폭 `+N` badge만 노출한다. Remote badge를 숨기는 설정이 적용된 ref는 `N`에 포함하지 않는다. Merge source branch의 ref가 삭제됐어도 merge message에서 이름을 복원할 수 있으면 second-parent tip commit 한 곳에 같은 크기와 graph lane 색상의 historical branch badge를 표시한다. 해당 commit에 실제 ref가 남아 있으면 실제 ref badge를 우선한다. Graph는 load된 commit의 parent 관계를 표현하고 default branch lane을 가장 왼쪽에 유지한다. All branches에서는 local default branch가 뒤처져 있어도 `origin/<default>`를 primary head로 유지하고, local branch scope에서는 exact local head를 사용한다. Remote default branch의 node와 first-parent line은 첫 palette blue로 고정하며 side lineage의 생성, collapse 또는 merge가 이 색상을 덮어쓰지 않는다. Merge 교차점에서도 side path가 default path를 가리지 않도록 default path를 마지막에 조금 더 두껍게 그린다. Side path는 default node 중심에서 색이 바뀌는 것처럼 보이지 않도록 node의 오른쪽 경계에 연결한다. 종료된 lane의 오른쪽 lane은 빈 공간을 남기지 않고 왼쪽으로 collapse한다. Lane color는 현재 x 위치가 아니라 active commit lineage에 속하므로, 같은 lineage가 빈 lane을 메우기 위해 왼쪽으로 이동해도 색상을 유지한다. Commit table 폭에 비례해 실제 lane을 6개에서 10개까지 표시하되, message 영역을 더 침범하지 않도록 10개를 상한으로 둔다. 이 범위의 lane color는 반복하지 않는다. 상한을 넘는 topology는 마지막 중립색 dashed lane 하나로 collapse한다. 실제 lane과 overflow lane 사이의 연결선은 branch 색과 중립색 사이의 gradient를 사용해 색상 전환 위치를 보존한다.
 
 Graph는 row마다 SVG를 만들지 않고 visible history 전체 높이를 소유하는 하나의 responsive-width SVG overlay로 그린다. Scroll은 이 overlay를 table content와 함께 이동시킬 뿐 draw를 다시 실행하지 않는다. Table 또는 Inspector 폭이 바뀌면 표시 가능한 lane 수와 graph width를 다시 계산한다. History page나 Preset 결과가 바뀌면 visible commit topology를 먼저 완성한 뒤 overlay 하나를 교체해 기존 row와 새 row가 서로 다른 lane 좌표를 잠시 사용하는 상태를 만들지 않는다. Preset으로 중간 commit이 숨겨지면 hidden chain을 가장 가까운 visible ancestor로 collapse한 뒤 graph를 계산한다. Default chain의 first parent가 side lane에 이미 예약되어 있어도 lane 0으로 재배치하고 기존 side lane을 합류시켜 MR 사이의 default line을 유지한다.
 
 Commit 날짜 구분선은 현재 local calendar를 기준으로 최근 7일은 일별, 같은 해의 그 이전 history는 월별, 이전 해는 연별로 표시한다. 월별 label은 해당 월의 `1.`로, 연별 label은 해당 연도의 `1. 1.`로 정규화한다. Separator가 추가한 높이는 graph 좌표에도 반영하고 lane은 separator 아래까지 연속해서 그린다. 행을 선택하면 Inspector가 다음 정보를 제공한다.
 
-- Full commit hash, message, author, date와 refs
+- Full commit hash, commit message, author, date와 refs. Message는 첫 줄을 heading으로, 나머지 body와 trailer는 줄바꿈을 유지한 muted 본문 block으로 분리해 위계를 유지한다. Body가 길면 자체 scroll을 사용하며, 복사는 원문 전체를 대상으로 한다.
 - 직접 가리키는 ref가 없는 merge second-parent commit은 merge source를 `Branch`로 표시하고, 이를 복원할 근거가 없을 때만 local branch containment를 `Branches`로 표시
-- Changed files list 또는 directory-first tree
+- Changed files list 또는 directory-first tree. List row는 directory 부분만 ellipsis로 줄이고 file 이름은 항상 끝까지 보여 준다. Search match badge가 붙는 row도 같은 규칙을 사용해 이름이 badge 아래로 가려지지 않게 한다.
 - 선택한 file의 unified diff
 - File path copy, Finder, terminal action
 - Commit message, author, file path를 새 Search session으로 보내는 context action
@@ -115,7 +117,7 @@ Branch scope는 그 scope를 rewrite target으로 사용한다. `All branches`�
 
 Detached `HEAD` worktree도 visual draft의 진입을 막지 않는다. 다만 Review는 target branch가 checkout된 worktree를 요구하므로, detached draft는 Apply 전에 해당 branch worktree에서 다시 열어야 한다.
 
-Edit Mode는 modal이나 별도 workbench를 열지 않는다. 기존 `HistoryToolbar → CommitTable → Inspector` 구성을 그대로 유지한다. Inspector action row의 label은 진입하면 `Exit Edit Mode`로 바뀌고, Commit table에는 inset outline이 생긴다. Worktree/branch selector와 top-level repository action은 mode 동안 잠긴다.
+Edit Mode는 modal이나 별도 workbench를 열지 않는다. 기존 `HistoryToolbar → CommitTable → Inspector` 구성을 그대로 유지한다. Inspector action row의 label은 진입하면 `Exit Edit`으로 바뀌고, Worktree/Branch selector와 Edit Mode rail, Commit table, pane resizer, Inspector를 하나로 감싸는 연속된 red boundary가 생긴다. Red는 mode 자체를 알리는 boundary와 focus outline에만 쓴다. 선택된 row는 일반 mode와 같은 blue selection을 유지해, 사용자가 직접 옮긴 row의 주황/노랑 강조와 구분되게 한다. Worktree/branch selector와 top-level repository action은 mode 동안 잠긴다.
 
 ## Edit Mode, Review, Apply
 
@@ -125,8 +127,8 @@ Edit Mode에서는 **Commit 순서와 message, Author, Author date draft를 loca
 - Draft는 Commit Page에서 보던 newest-first UI 순서 그대로 보관하고 표시한다.
 - Branch scope에서는 각 commit row 전체를 click-and-drag하여 다른 row의 위 또는 아래에 drop할 수 있다. `All branches`에서는 default branch target row만 drag/drop 대상이며, side branch row는 read-only다. 별도 drag handle, 순번, 이동 안내 행은 추가하지 않는다.
 - Drag 중 pointer가 이동 방향의 target row 안으로 30% 들어오면 주변 row가 위 또는 아래로 짧게 이동해 draft 위치를 미리 보여 준다. Preview reflow가 pointer 아래의 row를 바꿔도 작은 pointer 이동 안에서는 기존 preview를 유지해 왕복 animation을 막는다. Drop은 그 preview를 확정할 뿐이며, Graph는 animation 동안 잠시 숨겼다가 새 geometry와 함께 다시 표시한다.
-- 사용자가 직접 옮긴 commit row만 주황/노랑 background와 left accent로 표시한다. 다른 행이 밀려 위치가 달라진 것만으로는 표시하지 않으며, 원래 위치로 돌아오면 강조가 사라진다.
-- Row를 클릭하면 기존처럼 오른쪽 Inspector에서 해당 commit의 metadata, changed files와 diff를 읽는다. Edit Mode에서는 Inspector의 commit 제목, Author, Author date를 클릭해 그 자리에서 editor로 전환할 수 있다. message textarea는 줄바꿈과 wrapping에 맞춰 최대 180px까지 자동으로 높이를 늘리며, 그 이상은 내부 scroll을 사용한다. Author date는 timezone을 보존하는 ISO 8601 문자열로 입력한다. Review 전에는 원문과 직접 달라진 commit hash 옆에, Review 후에는 replacement가 생길 verified range 전체의 hash 옆에 `→ will be changed`를 표시한다.
+- 사용자가 직접 옮긴 commit row만 주황/노랑 background와 left accent로 표시한다. 다른 행이 밀려 위치가 달라진 것만으로는 표시하지 않으며, 원래 위치로 돌아오면 강조가 사라진다. 옮긴 row가 동시에 선택된 경우에는 주황 background를 유지하고 left accent만 blue로 바꾼다.
+- Row를 클릭하면 기존처럼 오른쪽 Inspector에서 해당 commit의 metadata, changed files와 diff를 읽는다. Edit Mode에서는 Inspector의 commit 제목, Author, Author date를 클릭해 그 자리에서 editor로 전환할 수 있다. Changed files와 diff는 현재도 read-only이며, 파일 내용 수정·삭제·복원 UI는 아직 제공하지 않는다. message textarea는 줄바꿈과 wrapping에 맞춰 최대 180px까지 자동으로 높이를 늘리며, 그 이상은 내부 scroll을 사용한다. Author date는 timezone을 보존하는 ISO 8601 문자열로 입력한다. Review 전에는 원문과 직접 달라진 commit hash 옆에, Review 후에는 replacement가 생길 verified range 전체의 hash 옆에 `→ will be changed`를 표시한다.
 - Inspector 상단의 worktree action도 mode 동안은 실행하지 못한다.
 - `Exit Edit Mode`를 누르면 아직 적용하지 않은 local reorder draft를 버리고, 보던 Commit Page의 history로 돌아간다.
 
