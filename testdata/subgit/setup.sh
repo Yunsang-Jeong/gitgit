@@ -8,6 +8,10 @@ fixture_commits="100"
 previous_fixture_commits="1000"
 fixture_branches="12"
 fixture_worktrees="12"
+# Commits reachable from every ref. HEAD count, branch count and the HEAD
+# subject all survive a history rewrite, so this is the value that actually
+# detects a fixture whose content no longer matches the script.
+fixture_reachable_commits="106"
 
 usage() {
 	echo "usage: setup.sh <create|reset> <repository-path>" >&2
@@ -39,9 +43,13 @@ fixture_matches() {
 	expected_version=$1
 	expected_commits=$2
 	expected_branches=$3
+	expected_reachable=$4
 	[ -f "$marker" ] || return 1
 	[ "$(marker_version)" = "$expected_version" ] || return 1
 	[ "$(git -C "$repo" rev-list --count HEAD 2>/dev/null)" = "$expected_commits" ] || return 1
+	if [ -n "$expected_reachable" ]; then
+		[ "$(git -C "$repo" rev-list --count --all 2>/dev/null)" = "$expected_reachable" ] || return 1
+	fi
 	[ "$(git -C "$repo" branch --format='%(refname:short)' 2>/dev/null | wc -l | tr -d ' ')" = "$expected_branches" ] || return 1
 	[ "$(git -C "$repo" worktree list --porcelain 2>/dev/null | grep -c '^worktree ')" = "$fixture_worktrees" ] || return 1
 	[ "$(git -C "$repo" log -1 --format=%s 2>/dev/null)" = "release: fixture history v2" ] || return 1
@@ -52,11 +60,11 @@ fixture_matches() {
 }
 
 fixture_is_current() {
-	fixture_matches "$fixture_version" "$fixture_commits" "$fixture_branches"
+	fixture_matches "$fixture_version" "$fixture_commits" "$fixture_branches" "$fixture_reachable_commits"
 }
 
 fixture_is_previous() {
-	fixture_matches "$previous_fixture_version" "$previous_fixture_commits" "$fixture_branches"
+	fixture_matches "$previous_fixture_version" "$previous_fixture_commits" "$fixture_branches" ""
 }
 
 commit_fixture() {

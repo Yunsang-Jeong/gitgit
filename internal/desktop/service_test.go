@@ -1244,21 +1244,17 @@ func TestCanonicalSubgitSideBranchHistoryStopsAtDefaultBranchPoint(t *testing.T)
 	}
 }
 
+// createCanonicalSubgitFixture prepares the canonical fixture in a disposable
+// cache directory. It deliberately never uses the workspace `subgit/` fixture:
+// that repository is the development playground the app is pointed at, so its
+// history is expected to change whenever someone exercises Edit Mode. Reusing it
+// here made these tests fail with unrelated diffs once its history was rewritten.
 func createCanonicalSubgitFixture(t *testing.T) string {
 	t.Helper()
 	script, err := filepath.Abs(filepath.Join("..", "..", "testdata", "subgit", "setup.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspaceRepository, err := filepath.Abs(filepath.Join("..", "..", "subgit"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceCommand := exec.Command("sh", script, "create", workspaceRepository)
-	if _, err := workspaceCommand.CombinedOutput(); err == nil {
-		return workspaceRepository
-	}
-
 	cacheRoot, err := os.UserCacheDir()
 	if err != nil {
 		t.Fatalf("resolve test fixture cache: %v", err)
@@ -1267,9 +1263,14 @@ func createCanonicalSubgitFixture(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Dir(repository), 0o755); err != nil {
 		t.Fatalf("create test fixture cache directory: %v", err)
 	}
-	command := exec.Command("sh", script, "create", repository)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("prepare cached canonical subgit fixture: %v\n%s", err, output)
+	if _, err := exec.Command("sh", script, "create", repository).CombinedOutput(); err == nil {
+		return repository
+	}
+
+	// The cache is disposable, so rebuild it instead of failing when a previous
+	// fixture version or a partial checkout is left behind.
+	if output, err := exec.Command("sh", script, "reset", repository).CombinedOutput(); err != nil {
+		t.Fatalf("rebuild cached canonical subgit fixture: %v\n%s", err, output)
 	}
 	return repository
 }
