@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Pattern } from '../lib/types'
+  import { formatLocalDateTimeInput } from '../lib/datetime'
   import { parseSearchExpression, searchExpressionText } from '../lib/search-expression'
 
   export let patterns: Pattern[] = []
@@ -38,6 +39,15 @@
     event.preventDefault()
     if (!queryError && patterns.length > 0) onSearch()
   }
+
+  function applyDateTime(event: Event, boundary: 'since' | 'until'): void {
+    const input = event.currentTarget as HTMLInputElement
+    const formatted = formatLocalDateTimeInput(input.value)
+    if (!formatted) return
+    if (boundary === 'since') since = formatted
+    else until = formatted
+    input.value = ''
+  }
 </script>
 
 <section class="search-composer" aria-label="Search composer">
@@ -49,7 +59,7 @@
         value={expressionDraft}
         on:input={updateExpression}
         on:keydown={handleExpressionKeydown}
-        placeholder="MSG: *cache* AND FILE: **/*.go"
+        placeholder="MSG: *cache* OR (DIFF: *timeout* AND FILE: **/*.go)"
         aria-label="Search expression"
         aria-describedby="search-expression-helper"
         aria-invalid={Boolean(queryError)}
@@ -57,12 +67,18 @@
         autocomplete="off"
       />
     </label>
-    <p id="search-expression-helper" class:error={Boolean(queryError)} class:stale={stale && !queryError} class="search-expression-helper" aria-live="polite">
+    <p
+      id="search-expression-helper"
+      class:error={Boolean(queryError)}
+      class:stale={stale && !queryError}
+      class="search-expression-helper"
+      aria-live={expressionDraft.trim() || queryError ? 'polite' : 'off'}
+    >
       <span aria-hidden="true">{queryError ? '!' : stale ? '↻' : '?'}</span>
       {#if queryError}
         {queryError}
       {:else if !expressionDraft.trim()}
-        Start with MSG:, DIFF:, or FILE:. Combine conditions with AND / OR and use ( ) for priority.
+        MSG: searches commit messages, DIFF: searches added or deleted line content, and FILE: searches changed paths. Combine conditions with AND / OR; use ( ) for priority and quotes around values with spaces.
       {:else if stale}
         Expression changed · Press Enter or Search to update the current results.
       {:else if applied}
@@ -87,23 +103,43 @@
       <span>Author</span>
       <input bind:value={author} placeholder="Anyone" />
     </label>
-    <label>
-      <span>Since</span>
-      <input bind:value={since} list="search-since-options" placeholder="Any time" aria-label="Search since date" />
+    <div class="filter-field">
+      <label for="search-since-input">Since</label>
+      <div class="search-date-control">
+        <input id="search-since-input" bind:value={since} list="search-since-options" placeholder="Any time" aria-label="Search since date" />
+        <input
+          class="search-date-picker"
+          type="datetime-local"
+          step="60"
+          aria-label="Choose search since date and time"
+          title="Choose date and time"
+          on:change={(event) => applyDateTime(event, 'since')}
+        />
+      </div>
       <datalist id="search-since-options">
         <option value="last:3d"></option>
         <option value="last:30d"></option>
         <option value="2026. 7. 19."></option>
         <option value="2026. 7. 19. 09:30:00"></option>
       </datalist>
-    </label>
-    <label>
-      <span>Until</span>
-      <input bind:value={until} list="search-until-options" placeholder="Now" aria-label="Search until date" />
+    </div>
+    <div class="filter-field">
+      <label for="search-until-input">Until</label>
+      <div class="search-date-control">
+        <input id="search-until-input" bind:value={until} list="search-until-options" placeholder="Now" aria-label="Search until date" />
+        <input
+          class="search-date-picker"
+          type="datetime-local"
+          step="60"
+          aria-label="Choose search until date and time"
+          title="Choose date and time"
+          on:change={(event) => applyDateTime(event, 'until')}
+        />
+      </div>
       <datalist id="search-until-options">
         <option value="2026. 7. 19."></option>
         <option value="2026. 7. 19. 18:00:00"></option>
       </datalist>
-    </label>
+    </div>
   </div>
 </section>

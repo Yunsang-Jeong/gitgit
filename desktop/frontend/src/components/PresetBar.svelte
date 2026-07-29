@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { presetUnavailable } from '../lib/presets'
+  import { maxFilterPresets, presetUnavailable } from '../lib/presets'
   import type { Author, CommitFilterPreset } from '../lib/types'
 
   export let presets: CommitFilterPreset[] = []
@@ -14,7 +14,7 @@
 </script>
 
 <div class="preset-controls" aria-label="Commit filter presets">
-  {#each presets as preset (preset.id)}
+  {#each presets.slice(0, maxFilterPresets) as preset (preset.id)}
     <button
       class:active={activeIDs.includes(preset.id)}
       type="button"
@@ -24,7 +24,7 @@
       on:click={() => onToggle(preset.id)}
     >
       <span class="preset-button-state"></span>
-      {preset.label}
+      <span class="preset-button-label">{preset.label}</span>
     </button>
   {:else}
     <small>Add presets in Settings.</small>

@@ -24,16 +24,6 @@
   export let onEditMessage: (message: string) => void = () => undefined
   export let onEditAuthor: (author: Author) => void = () => undefined
   export let onEditDate: (date: string) => void = () => undefined
-  export let canEditCommits = false
-  export let editDisabledReason = ''
-  export let editModeActionDisabled = false
-  export let onEnterEditMode: () => void = () => undefined
-  export let onExitEditMode: () => void = () => undefined
-  export let showWorktreeActions = false
-  export let worktreeActionsDisabled = false
-  export let onOpenCurrentWorktree: () => void = () => undefined
-  export let onOpenCurrentWorktreeInTerminal: () => void = () => undefined
-  export let onOpenCurrentWorktreeInIDE: () => void = () => undefined
   export let onOpenFinder: (path: string) => void
   export let onOpenTerminal: (path: string) => void
   export let onOpenExternalURL: (url: string) => void
@@ -304,25 +294,6 @@
 <svelte:window on:keydown={handleWindowKeydown} on:mousedown={() => closeDiffPopover()} on:resize={() => closeDiffPopover()} />
 
 <aside class:edit-mode={editMode} class="inspector pane">
-  {#if showWorktreeActions}
-    <div class="inspector-worktree-toolbar" aria-label="Current worktree actions">
-      <span class="inspector-worktree-scope">Worktree</span>
-      <div class="inspector-worktree-actions">
-        <button
-          class:edit-mode-active={editMode}
-          class="inspector-worktree-action inspector-edit-mode-action"
-          type="button"
-          aria-pressed={editMode}
-          on:click={editMode ? onExitEditMode : onEnterEditMode}
-          disabled={editModeActionDisabled || (!editMode && !canEditCommits)}
-          title={editMode ? 'Exit Edit Mode and discard this local reorder draft' : editDisabledReason || 'Enter Edit Mode for the visible history'}
-        ><span aria-hidden="true">✎</span><span>{editMode ? 'Exit Edit' : 'Edit Mode'}</span></button>
-        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktree} disabled={worktreeActionsDisabled} title="Open the current worktree in Finder" aria-label="Open current worktree in Finder"><span aria-hidden="true">▱</span><span>Finder</span></button>
-        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktreeInTerminal} disabled={worktreeActionsDisabled} title="Open the current worktree in Terminal" aria-label="Open current worktree in Terminal"><span aria-hidden="true">⌘</span><span>Terminal</span></button>
-        <button class="inspector-worktree-action" type="button" on:click={onOpenCurrentWorktreeInIDE} disabled={worktreeActionsDisabled} title="Open the current worktree in the configured IDE" aria-label="Open current worktree in IDE"><span aria-hidden="true">↗</span><span>IDE</span></button>
-      </div>
-    </div>
-  {/if}
   <div class="pane-title inspector-pane-title">
     <span>Inspector</span>
     <div class="inspector-tabs" role="tablist" aria-label="Inspector views">

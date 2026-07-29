@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatDate, matchesDatePattern, normalizeSearchBoundary } from '../src/lib/datetime.ts'
+import { formatDate, formatLocalDateTimeInput, matchesDatePattern, normalizeSearchBoundary } from '../src/lib/datetime.ts'
 
 test('dates use the GitGit calendar format with optional time', () => {
   const local = new Date(2026, 6, 19, 9, 8, 7)
@@ -22,4 +22,13 @@ test('search boundaries normalize display dates and last:N days to ISO timestamp
   assert.equal(normalizeSearchBoundary('2026. 7. 19.', 'since'), new Date(2026, 6, 19, 0, 0, 0).toISOString())
   assert.equal(normalizeSearchBoundary('2026. 7. 19.', 'until'), new Date(2026, 6, 19, 23, 59, 59, 999).toISOString())
   assert.equal(normalizeSearchBoundary('last:3d', 'since', now), new Date(2026, 6, 16, 12, 0, 0).toISOString())
+})
+
+test('native date-time picker values become GitGit display timestamps', () => {
+  const display = formatLocalDateTimeInput('2026-07-19T09:30')
+  assert.equal(display, '2026. 7. 19. 09:30')
+  assert.equal(normalizeSearchBoundary(display, 'since'), new Date(2026, 6, 19, 9, 30, 0, 0).toISOString())
+  assert.equal(normalizeSearchBoundary(display, 'until'), new Date(2026, 6, 19, 9, 30, 59, 999).toISOString())
+  assert.equal(formatLocalDateTimeInput('2026-02-30T09:30'), '')
+  assert.equal(formatLocalDateTimeInput('last:3d'), '')
 })

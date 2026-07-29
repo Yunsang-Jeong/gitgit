@@ -26,7 +26,7 @@
   } from './lib/commit-edit'
   import { normalizeSearchBoundary } from './lib/datetime'
   import { visibleCommits } from './lib/history'
-  import { cloneFilterPresets, defaultFilterLogic, defaultFilterPresets, resolvePresetRules } from './lib/presets'
+  import { cloneFilterPresets, defaultFilterLogic, defaultFilterPresets, limitFilterPresets, resolvePresetRules } from './lib/presets'
   import { defaultRemoteBadgeRules, normalizeRemoteBadgeIcon } from './lib/remotes'
   import { groupSearchResultsByCommit, searchResultCommitCount } from './lib/search-results'
   import { searchExpressionError, searchPatternText } from './lib/search-expression'
@@ -1120,7 +1120,7 @@
   }
 
   function updatePresets(presets: CommitFilterPreset[]): void {
-    const nextPresets = cloneFilterPresets(presets)
+    const nextPresets = limitFilterPresets(cloneFilterPresets(presets))
     appSettings = { ...appSettings, presets: nextPresets }
     activePresetIDs = activePresetIDs.filter((id) => nextPresets.some((preset) => preset.id === id))
     saveAppSettings()
@@ -1181,7 +1181,7 @@
     if (!Array.isArray(value)) return defaultFilterPresets()
     const actions: CommitFilterAction[] = ['hide', 'show']
     const fields: CommitFilterField[] = ['branch', 'author', 'message', 'file', 'date']
-    return value.flatMap((candidate, presetIndex) => {
+    return limitFilterPresets(value.flatMap((candidate, presetIndex) => {
       if (!candidate || typeof candidate !== 'object') return []
       const preset = candidate as Partial<CommitFilterPreset>
       if (!Array.isArray(preset.rules)) return []
@@ -1199,7 +1199,7 @@
         }]
       })
       return rules.length > 0 ? [{ id, label, rules }] : []
-    })
+    }))
   }
 
   function readRemoteBadgeRules(value: unknown): RemoteBadgeRule[] {
@@ -1915,30 +1915,40 @@
     onViewChange={(view) => void changeNavigatorView(view)}
   />
 
-  <div class:edit-mode-active={editModeOpen} class:focus-mode={navigatorView !== 'commit'} class="workspace" style:--inspector-width={`${inspectorWidth}px`}>
+  <div class:commit-workspace-active={navigatorView === 'commit'} class:edit-mode-active={editModeOpen} class:focus-mode={navigatorView !== 'commit'} class="workspace" style:--inspector-width={`${inspectorWidth}px`}>
     {#if navigatorView === 'commit'}
-      <section class:edit-mode={editModeOpen} class="history-pane pane">
-        <HistoryToolbar
-          scope={historyScope}
-          allBranches={historyAllBranches}
-          branches={history.branches}
-          worktrees={repository?.worktrees ?? []}
-          defaultBranch={repository?.default_branch ?? ''}
-          currentBranch={repository?.branch ?? ''}
-          currentDetached={currentWorktreeDetached}
-          currentHead={repository?.head ?? ''}
-          {activeProjectRoot}
-          activeWorktreeRoot={repository?.root ?? ''}
-          presets={appSettings.presets}
-          {activePresetIDs}
-          author={repository?.user ?? { name: '', email: '' }}
-          disabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing}
-          editMode={editModeOpen}
-          onScopeChange={(nextScope, nextAllBranches) => void changeHistoryScope(nextScope, nextAllBranches)}
-          onWorktreeChange={(worktree) => void selectWorktree(worktree)}
-          onTogglePreset={togglePreset}
-        />
+      <HistoryToolbar
+        scope={historyScope}
+        allBranches={historyAllBranches}
+        branches={history.branches}
+        worktrees={repository?.worktrees ?? []}
+        defaultBranch={repository?.default_branch ?? ''}
+        currentBranch={repository?.branch ?? ''}
+        currentDetached={currentWorktreeDetached}
+        currentHead={repository?.head ?? ''}
+        {activeProjectRoot}
+        activeWorktreeRoot={repository?.root ?? ''}
+        presets={appSettings.presets}
+        {activePresetIDs}
+        author={repository?.user ?? { name: '', email: '' }}
+        disabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing}
+        editMode={editModeOpen}
+        {canEditCommits}
+        {editDisabledReason}
+        editModeActionDisabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing || editReviewing || editApplying}
+        worktreeActionsDisabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing || editModeOpen}
+        onScopeChange={(nextScope, nextAllBranches) => void changeHistoryScope(nextScope, nextAllBranches)}
+        onWorktreeChange={(worktree) => void selectWorktree(worktree)}
+        onTogglePreset={togglePreset}
+        onEnterEditMode={startEditMode}
+        onExitEditMode={requestExitEditMode}
+        onOpenCurrentWorktree={() => void openCurrentWorktree()}
+        onOpenCurrentWorktreeInTerminal={() => void openCurrentWorktreeInTerminal()}
+        onOpenCurrentWorktreeInIDE={() => void openCurrentWorktreeInIDE()}
+      />
 
+      <div class="commit-workspace">
+        <section class:edit-mode={editModeOpen} class="history-pane pane">
         {#if editModeOpen}
           <section
             class:review-ready={editReviewIsCurrent && editReviewStack}
@@ -2084,16 +2094,6 @@
         onEditMessage={(message) => updateEditCommitMessage(selectedCommit, message)}
         onEditAuthor={(author) => updateEditCommitAuthor(selectedCommit, author)}
         onEditDate={(date) => updateEditCommitDate(selectedCommit, date)}
-        {canEditCommits}
-        {editDisabledReason}
-        editModeActionDisabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing || editReviewing || editApplying}
-        onEnterEditMode={startEditMode}
-        onExitEditMode={requestExitEditMode}
-        showWorktreeActions={true}
-        worktreeActionsDisabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing || editModeOpen}
-        onOpenCurrentWorktree={() => void openCurrentWorktree()}
-        onOpenCurrentWorktreeInTerminal={() => void openCurrentWorktreeInTerminal()}
-        onOpenCurrentWorktreeInIDE={() => void openCurrentWorktreeInIDE()}
         onOpenFinder={(path) => void revealFile(path)}
         onOpenTerminal={(path) => void openInTerminal(path)}
         onOpenExternalURL={(url) => void openExternalURL(url)}
@@ -2101,6 +2101,7 @@
         onAddFileSearch={(path) => void addPatternSearch('file', path)}
         onLoadTree={loadRepositoryTree}
       />
+      </div>
     {:else if navigatorView === 'worktrees' && repository}
       <WorktreeGrid
         {repository}

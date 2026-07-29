@@ -46,6 +46,26 @@ export function normalizeSearchBoundary(value: string, boundary: DateBoundary, n
   return (boundary === 'since' ? absolute.start : new Date(absolute.end.getTime() - 1)).toISOString()
 }
 
+export function formatLocalDateTimeInput(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value.trim())
+  if (!match) return ''
+  const [, yearValue, monthValue, dayValue, hourValue, minuteValue] = match
+  const year = Number(yearValue)
+  const month = Number(monthValue)
+  const day = Number(dayValue)
+  const hour = Number(hourValue)
+  const minute = Number(minuteValue)
+  const date = new Date(year, month - 1, day, hour, minute, 0, 0)
+  if (
+    date.getFullYear() !== year
+    || date.getMonth() !== month - 1
+    || date.getDate() !== day
+    || date.getHours() !== hour
+    || date.getMinutes() !== minute
+  ) return ''
+  return `${year}. ${month}. ${day}. ${pad(hour)}:${pad(minute)}`
+}
+
 function parseDisplayDate(value: string): ParsedDatePattern | null {
   const match = /^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(value.trim())
   if (!match) return null

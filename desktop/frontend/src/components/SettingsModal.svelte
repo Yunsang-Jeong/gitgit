@@ -1,5 +1,6 @@
 <script lang="ts">
   import RemoteBadgeIcon from './RemoteBadgeIcon.svelte'
+  import { maxFilterPresets } from '../lib/presets'
   import { isEmbeddedRemoteBadgeIcon, normalizeRemoteBadgeIcon, remoteBadgeIconOptions, resolveRefBadge } from '../lib/remotes'
   import type { ChangedFilesView, CommitFilterAction, CommitFilterField, CommitFilterPreset, IDEPreference, RegisteredProject, RemoteBadgeRule, RemoteInfo, TerminalPreference } from '../lib/types'
 
@@ -125,6 +126,7 @@
   }
 
   function addPreset(): void {
+    if (presets.length >= maxFilterPresets) return
     const id = `preset-${Date.now()}-${Math.random()}`
     onPresetsChange([...presets, {
       id,
@@ -249,11 +251,11 @@
           <div class="settings-section-heading">
             <div>
               <h2>Commit presets</h2>
-              <p>Edit the buttons shown immediately above the commit table. Use <code>$me</code> for the current Git user, <code>last:3d</code> for a relative date, or <code>2026. 7. 19.</code> for a calendar date.</p>
+              <p>Edit up to {maxFilterPresets} buttons shown beside Worktree and Branch. Use <code>$me</code> for the current Git user, <code>last:3d</code> for a relative date, or <code>2026. 7. 19.</code> for a calendar date.</p>
             </div>
             <div class="settings-project-actions">
               <button type="button" on:click={onResetPresets}>Reset defaults</button>
-              <button class="primary" type="button" on:click={addPreset}>＋ Add preset</button>
+              <button class="primary" type="button" on:click={addPreset} disabled={presets.length >= maxFilterPresets} title={presets.length >= maxFilterPresets ? `Up to ${maxFilterPresets} presets can be registered.` : 'Add preset'}>＋ Add preset</button>
             </div>
           </div>
 

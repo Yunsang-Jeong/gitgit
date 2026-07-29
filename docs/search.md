@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: search
-last_updated: 2026-07-28
+last_updated: 2026-07-30
 ---
 
 # Search Module
@@ -53,6 +53,8 @@ Backend는 한 번에 하나의 active search만 실행한다. 다른 session으
 ```text
 [Project]  [Worktree]  [Branch]  [Search]
 ```
+
+Session sidebar header와 target toolbar는 36px section bar를 사용한다. Project, Worktree, Branch, Search와 composer toggle은 이 bar 안에서 26px compact control로 정렬한다.
 
 - **Project**: Registered project 또는 새 repository를 선택한다.
 - **Worktree**: 검색이 실행될 실제 repository root를 선택한다.
@@ -119,7 +121,7 @@ Go regular-expression syntax를 사용한다. `^`, `$`로 anchor하지 않으면
 
 All refs와 별도 revision expression은 동시에 사용할 수 없다. Revision value가 Git option처럼 `-`로 시작하면 거부한다.
 
-Author는 Git author filter로 전달한다. Since/Until은 absolute date/time과 `last:3d`, `last:30d` 같은 relative input을 지원하며 실행 전에 ISO timestamp로 정규화한다.
+Author는 Git author filter로 전달한다. Since/Until은 absolute date/time과 `last:3d`, `last:30d` 같은 relative input을 지원하며 실행 전에 ISO timestamp로 정규화한다. Text input 옆의 calendar control은 native date/time picker를 열고 선택한 local wall time을 같은 display timestamp 형식으로 입력한다. 따라서 picker를 사용해도 relative input을 직접 입력하는 기존 경로는 유지된다.
 
 ## 실행과 결과
 

@@ -10,6 +10,8 @@ import {
 } from '../src/lib/history.ts'
 import {
   defaultFilterPresets,
+  limitFilterPresets,
+  maxFilterPresets,
   presetUnavailable,
   resolvePresetRules,
 } from '../src/lib/presets.ts'
@@ -135,4 +137,15 @@ test('preset activation covers none, each default, and both defaults', () => {
   }
   assert.equal(presetUnavailable(presets[0], { name: '', email: '' }), true)
   assert.equal(presetUnavailable(presets[0], author), false)
+})
+
+test('preset registration keeps only the first three buttons', () => {
+  const presets = Array.from({ length: maxFilterPresets + 1 }, (_, index) => ({
+    id: `preset-${index + 1}`,
+    label: `Preset ${index + 1}`,
+    rules: [{ id: `rule-${index + 1}`, action: 'show', field: 'message', pattern: '*' }],
+  }))
+
+  assert.equal(maxFilterPresets, 3)
+  assert.deepEqual(limitFilterPresets(presets).map((preset) => preset.id), ['preset-1', 'preset-2', 'preset-3'])
 })

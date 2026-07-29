@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: commit
-last_updated: 2026-07-28
+last_updated: 2026-07-30
 ---
 
 # Commit Module
@@ -19,10 +19,7 @@ Commit module은 선택한 worktree를 기준으로 Git history를 읽고, 별�
 상단 control의 순서는 다음과 같다.
 
 ```text
-[Worktree: main]  [Branch: All branches]
-Preset   [My Jobs]  [3 Days]
-
-Worktree  [✎ Edit Mode]  [▱ Finder]  [⌘ Terminal]  [↗ IDE]
+[Worktree: main]  [Branch: All branches]  [My Jobs]  [3 Days]  [✎ Edit Mode]  [▱ Finder]  [⌘ Terminal]  [↗ IDE]  ─ workspace full width
 Inspector  [Changes]  [Files]
 ```
 
@@ -32,7 +29,7 @@ Inspector  [Changes]  [Files]
 
 - **Worktree 선택**은 active repository root를 해당 checkout path로 바꾼다. Attached worktree는 checkout된 branch를, detached worktree는 `HEAD`를 초기 history scope로 사용한다.
 - **Branch 선택**은 active worktree를 바꾸거나 branch를 checkout하지 않는다. Commit table이 읽는 revision scope만 바꾼다.
-- Worktree와 Branch selector는 26px 높이의 가로 label/value control로 표시한다. Inspector 위의 action row에는 같은 너비의 **✎ Edit Mode**, **▱ Finder**, **⌘ Terminal**, **↗ IDE**를 둔다. 뒤 세 action은 선택된 commit이나 file이 아니라 현재 선택된 worktree root를 연다. 이 row는 Inspector가 아니라 worktree를 대상으로 하므로 `Worktree` scope label을 앞에 두어 Inspector 내용과 구분한다.
+- Worktree와 Branch selector, Preset button, **✎ Edit Mode**, **▱ Finder**, **⌘ Terminal**, **↗ IDE**는 Inspector 위까지 이어지는 36px workspace-wide toolbar 한 줄에 둔다. Preset과 worktree action 묶음은 Branch dropdown의 우측에 놓는다. Inspector와 Commit table은 이 toolbar 바로 아래에서 시작한다. Selector와 Preset button은 26px 높이이며, Preset button은 각각 최소·최대 폭 안에서 label을 ellipsis 처리한다. 뒤 세 action은 선택된 commit이나 file이 아니라 현재 선택된 worktree root를 연다.
 - **All branches**는 실제 `All`이라는 branch와 혼동하지 않도록 자연어 scope로 표시한다.
 
 Branch dropdown은 다음 규칙을 사용한다.
@@ -100,7 +97,7 @@ Rule은 다음 field를 대상으로 한다.
 - Changed file
 - Date
 
-Action은 `Hide`, `Show`다. 여러 Show rule은 모두 만족해야 하고, Hide rule은 하나라도 만족하면 제외한다. `My Jobs`, `3 Days` 같은 Preset은 Settings에서 편집하며 `$me`와 `last:3d` 같은 값을 사용할 수 있다. 이전 settings에 남아 있는 `Highlight` rule은 load할 때 제외하며, 그 결과 유효한 rule이 하나도 없는 Preset도 표시하지 않는다.
+Action은 `Hide`, `Show`다. 여러 Show rule은 모두 만족해야 하고, Hide rule은 하나라도 만족하면 제외한다. `My Jobs`, `3 Days` 같은 Preset은 Settings에서 편집하며 `$me`와 `last:3d` 같은 값을 사용할 수 있다. Commit toolbar에는 `PRESET` label 없이 최대 세 개의 Preset button만 표시한다. Settings는 세 개가 등록되면 Add preset을 비활성화하고, 저장값을 읽을 때도 유효한 Preset의 처음 세 개만 유지한다. 이전 settings에 남아 있는 `Highlight` rule은 load할 때 제외하며, 그 결과 유효한 rule이 하나도 없는 Preset도 표시하지 않는다.
 
 ## Edit Mode 진입
 

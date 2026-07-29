@@ -1,6 +1,7 @@
 import type { Author, CommitFilterLogic, CommitFilterPreset, CommitFilterRule } from './types'
 
 export const defaultFilterLogic: CommitFilterLogic = { show: 'and', hide: 'or' }
+export const maxFilterPresets = 3
 
 export function defaultFilterPresets(): CommitFilterPreset[] {
   return [
@@ -22,6 +23,10 @@ export function cloneFilterPresets(presets: CommitFilterPreset[]): CommitFilterP
     ...preset,
     rules: preset.rules.map((rule) => ({ ...rule })),
   }))
+}
+
+export function limitFilterPresets(presets: CommitFilterPreset[]): CommitFilterPreset[] {
+  return presets.slice(0, maxFilterPresets)
 }
 
 export function resolvePresetRules(presets: CommitFilterPreset[], activeIDs: string[], author: Author): CommitFilterRule[] {
