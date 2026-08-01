@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: worktree
-last_updated: 2026-07-28
+last_updated: 2026-08-02
 ---
 
 # Worktree Module
@@ -29,6 +29,8 @@ Worktree module은 하나의 Git repository에 연결된 checkout들을 작업 �
 
 ## 화면 구성
 
+상단은 36px 한 줄 section bar를 사용한다. `WORKTREES`와 detected default branch만 왼쪽에 표시하고 worktree 수는 하단 status bar에 맡긴다. `Actions`와 화면에 축약해 표시하는 `Clear merged`는 26px compact control이며, 후자는 접근성 이름으로 `Clear merged worktrees`를 유지한다.
+
 Worktree는 다음 group으로 나뉜다.
 
 - **Main**: Git이 보고한 primary worktree
@@ -36,6 +38,8 @@ Worktree는 다음 group으로 나뉜다.
 - **Unmerged**: 아직 merge되지 않았거나 보호해야 하는 active worktree
 
 각 card는 다음 정보를 표시한다.
+
+Card는 Commit 화면과 같은 32px rhythm을 사용한다. Summary, path/status, per-card action을 각각 32px rail로 구성하고 `Commits`, `Finder`, `IDE`는 rail 안의 26px compact control로 정렬한다. 선택 상태는 Commit row와 같은 blue fill 및 왼쪽 accent를 사용한다.
 
 - Branch 또는 detached 상태
 - Absolute worktree path

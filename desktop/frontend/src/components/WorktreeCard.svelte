@@ -47,6 +47,7 @@
     class:selectable={!main}
     class="worktree-card-select"
     type="button"
+    aria-pressed={main ? undefined : selected}
     title={main ? 'Main worktree is not selectable' : 'Click to toggle selection · Shift-click to select a range'}
     on:click={(event) => { if (!main) onToggle(worktree, !selected, event.shiftKey) }}
   >
@@ -55,7 +56,6 @@
       <strong>{worktree.detached ? 'detached' : worktree.branch || 'unknown'}</strong>
     </span>
     <span class="worktree-card-badges">
-      {#if main}<b class="main-badge">Main</b>{/if}
       {#if worktree.locked}<b class="lock-badge">Locked</b>{/if}
       {#if !worktree.detached}
         {#if worktree.branch === defaultBranch}

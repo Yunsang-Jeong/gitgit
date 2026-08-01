@@ -143,9 +143,9 @@
 
 <section class="worktree-workspace pane">
   <header class="workspace-view-header">
-    <div>
+    <div class="workspace-view-heading">
       <h1>Worktrees</h1>
-      <p>{repository.worktrees.length} {repository.worktrees.length === 1 ? 'worktree' : 'worktrees'} · default branch <strong>{repository.default_branch}</strong></p>
+      <span class="workspace-view-summary">Default <strong>{repository.default_branch}</strong></span>
     </div>
 
     <div class="worktree-header-actions">
@@ -183,9 +183,11 @@
       <button
         class="worktree-clear-merged"
         type="button"
+        aria-label="Clear merged worktrees"
+        title="Clear merged worktrees"
         disabled={removableWorktrees.length === 0 || removing}
         on:click={() => void requestRemoval(removableWorktrees)}
-      >Clear merged worktrees</button>
+      >Clear merged</button>
     </div>
   </header>
 

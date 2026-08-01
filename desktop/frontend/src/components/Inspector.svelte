@@ -353,8 +353,8 @@
             </button>
           {/if}
         {:else}
-          <button class="copy-layer copy-heading" type="button" title="Copy commit message" on:click={() => void copyLayer(selected.message, 'Commit message')}>
-            <h2 class="copy-target commit-message-subject">{subject(selected.message)}</h2>
+          <button class="copy-layer copy-heading commit-message-copy-target" type="button" aria-label="Copy commit message" title="Copy commit message" on:click={() => void copyLayer(selected.message, 'Commit message')}>
+            <h2 class="commit-message-subject">{subject(selected.message)}</h2>
             {#if body(selected.message)}<span class="commit-message-body">{body(selected.message)}</span>{/if}
           </button>
         {/if}

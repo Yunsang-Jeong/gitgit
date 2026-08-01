@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: commit
-last_updated: 2026-07-30
+last_updated: 2026-08-01
 ---
 
 # Commit Module
@@ -29,7 +29,7 @@ Inspector  [Changes]  [Files]
 
 - **Worktree 선택**은 active repository root를 해당 checkout path로 바꾼다. Attached worktree는 checkout된 branch를, detached worktree는 `HEAD`를 초기 history scope로 사용한다.
 - **Branch 선택**은 active worktree를 바꾸거나 branch를 checkout하지 않는다. Commit table이 읽는 revision scope만 바꾼다.
-- Worktree와 Branch selector, Preset button, **✎ Edit Mode**, **▱ Finder**, **⌘ Terminal**, **↗ IDE**는 Inspector 위까지 이어지는 36px workspace-wide toolbar 한 줄에 둔다. Preset과 worktree action 묶음은 Branch dropdown의 우측에 놓는다. Inspector와 Commit table은 이 toolbar 바로 아래에서 시작한다. Selector와 Preset button은 26px 높이이며, Preset button은 각각 최소·최대 폭 안에서 label을 ellipsis 처리한다. 뒤 세 action은 선택된 commit이나 file이 아니라 현재 선택된 worktree root를 연다.
+- Worktree와 Branch selector, Preset button, **✎ Edit Mode**, **▱ Finder**, **⌘ Terminal**, **↗ IDE**는 Inspector 위까지 이어지는 36px workspace-wide toolbar 한 줄에 둔다. Preset과 worktree action 묶음은 Branch dropdown의 우측에 놓는다. Inspector와 Commit table은 이 toolbar 바로 아래에서 시작한다. Selector와 Preset button은 26px 높이이며, Project·Worktree·Branch dropdown의 검색 행과 선택 행은 32px 높이를 공유한다. Dropdown의 primary text, path와 status badge는 이 compact row에 맞는 type scale을 사용하고 badge 묶음은 한 줄을 유지한다. Preset button은 각각 최소·최대 폭 안에서 label을 ellipsis 처리한다. 뒤 세 action은 선택된 commit이나 file이 아니라 현재 선택된 worktree root를 연다.
 - **All branches**는 실제 `All`이라는 branch와 혼동하지 않도록 자연어 scope로 표시한다.
 
 Branch dropdown은 다음 규칙을 사용한다.

@@ -179,7 +179,11 @@
         aria-controls="search-query-panel"
         aria-expanded={!queryCollapsed}
         title={queryCollapsed ? 'Show query composer' : 'Hide query composer'}
-      >{queryCollapsed ? '↓' : '↑'}</button>
+      >
+        <svg class:collapsed={queryCollapsed} class="search-layout-chevron" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m4 10 4-4 4 4" />
+        </svg>
+      </button>
     </header>
 
     <div id="search-query-panel" class="search-session-query" hidden={queryCollapsed}>

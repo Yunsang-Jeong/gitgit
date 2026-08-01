@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: search
-last_updated: 2026-07-30
+last_updated: 2026-08-01
 ---
 
 # Search Module
@@ -75,7 +75,7 @@ Condition source는 세 가지다.
 
 Query composer는 condition row를 여러 개 쌓는 visual builder가 아니라 하나의 Expression input을 사용한다. 각 condition은 `MSG:`, `DIFF:`, `FILE:` source prefix로 시작하고 `AND` 또는 `OR`로 연결한다. 괄호를 직접 입력해 우선순위를 표현하며 한 condition 앞뒤에는 각각 최대 8개 group boundary를 둘 수 있다. 공백, `AND`/`OR` 또는 괄호를 literal value로 검색해야 하면 single/double quote로 value를 감싼다.
 
-Expression 아래 helper는 빈 입력에서 source와 operator 사용법을 안내하고, 입력 중에는 누락된 colon, value, 다음 source와 닫는 괄호 같은 구문 오류를 즉시 표시한다. Valid expression에는 condition 수, Glob/Regex hint, Enter 실행 방법 또는 현재 결과와의 stale/applied 상태를 표시한다. 별도의 condition chip summary는 중복 표시하지 않는다. Engine, Author, Since, Until은 동일 너비 grid로 정렬하며 sidebar와 main panel은 같은 outer gutter를 사용한다. Search action 우측의 화살표 control로 composer 전체를 접어 결과와 Inspector에 세로 공간을 돌려줄 수 있고, 접어도 작성 중인 expression과 scope는 유지한다.
+Expression 아래 helper는 빈 입력에서 source와 operator 사용법을 안내하고, 입력 중에는 누락된 colon, value, 다음 source와 닫는 괄호 같은 구문 오류를 즉시 표시한다. Valid expression에는 condition 수, Glob/Regex hint, Enter 실행 방법 또는 현재 결과와의 stale/applied 상태를 표시한다. 별도의 condition chip summary는 중복 표시하지 않는다. Engine, Author, Since, Until은 동일 너비 grid로 정렬하며 sidebar와 main panel은 같은 outer gutter를 사용한다. Search action 우측의 접기/펼치기 chevron으로 composer 전체를 접어 결과와 Inspector에 세로 공간을 돌려줄 수 있고, 접어도 작성 중인 expression과 scope는 유지한다.
 
 괄호가 없으면 AND가 OR보다 먼저 평가되며, group이 있으면 해당 범위가 우선한다. Frontend와 backend는 생성된 expression을 모두 검증한다.
 
