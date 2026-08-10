@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: gate
 scope: development
-last_updated: 2026-07-27
+last_updated: 2026-08-07
 ---
 
 # Development and Browser Verification
@@ -43,6 +43,8 @@ task dev:browser WAILS_DEVSERVER=localhost:34117
 ## Go Task와 toolchain
 
 GitGit은 go-task 3.50 이상을 사용한다. Taskfile의 task는 macOS 전용이며, 다른 OS에서는 task body를 건너뛰지 않고 실행 전에 명확한 오류로 종료한다. Bundle platform은 `darwin/arm64`로 고정하지 않고 현재 macOS host의 architecture를 사용하며, `task check:native`도 같은 architecture를 검증한다.
+
+Wails library와 versioned CLI는 함께 `v2.12.0`으로 pin한다. `v2.13.0`의 embedded browser-dev overlay는 Svelte 5 component를 legacy constructor 방식으로 실행해 reload 중 종료될 수 있으므로, upstream overlay가 Svelte 5 `mount` 또는 compatibility API로 수정되고 browser reload/reconnect와 native check를 다시 통과하기 전에는 한쪽 version만 올리지 않는다.
 
 Taskfile은 시작 시 `npm`의 absolute path를 찾고 Wails child process의 `PATH` 앞에 그 directory를 전달한다. GUI shell처럼 login shell과 `PATH`가 다른 환경에서는 다음처럼 명시할 수 있다.
 

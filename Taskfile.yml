@@ -33,7 +33,7 @@ vars:
   SOURCE_REVISION:
     sh: 'printf "%s" "${SOURCE_REVISION:-$(git describe --always --dirty 2>/dev/null || printf unknown)}"'
   TEST_SEED: '{{.TEST_SEED | default "20260718"}}'
-  WAILS_PACKAGE: '{{.WAILS_PACKAGE | default "github.com/wailsapp/wails/v2/cmd/wails@v2.13.0"}}'
+  WAILS_PACKAGE: '{{.WAILS_PACKAGE | default "github.com/wailsapp/wails/v2/cmd/wails@v2.12.0"}}'
   WAILS_DEVSERVER: '{{.WAILS_DEVSERVER | default "localhost:34116"}}'
 
   SUBGIT_DIR:

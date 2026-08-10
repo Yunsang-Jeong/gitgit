@@ -3,7 +3,7 @@ module github.com/yunsang/gitgit/desktop
 go 1.26.0
 
 require (
-	github.com/wailsapp/wails/v2 v2.13.0
+	github.com/wailsapp/wails/v2 v2.12.0
 	github.com/yunsang/gitgit v0.0.0
 )
 
