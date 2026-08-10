@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: commit
-last_updated: 2026-08-01
+last_updated: 2026-08-08
 ---
 
 # Commit Module
@@ -42,7 +42,7 @@ Dropdown에는 검색 input이 있으며 처음부터 모든 branch를 렌더링
 
 ## History loading
 
-`All branches`에서는 선택 가능한 ref의 commit을 topology order로 읽어 parent가 child보다 먼저 나타나지 않게 한다. Remote ref badge는 Settings의 URL mapping과 embedded provider icon을 사용한다.
+History는 commit을 author-date order로 읽되 topology 제약을 유지해 parent가 child보다 먼저 나타나지 않게 한다. 화면에 표시하는 author date를 우선하므로 merge된 side lineage의 오래된 commit이 최신 날짜 사이에 통째로 끼는 현상을 줄인다. `All branches`에서는 선택 가능한 ref를 함께 읽는다. Remote ref badge는 Settings의 URL mapping과 embedded provider icon을 사용한다.
 
 Default branch가 아닌 local branch를 선택하면 초기 table은 다음 범위만 보여준다.
 
@@ -68,7 +68,7 @@ Commit table은 ARIA table로 노출한다. Scroll container와 row wrapper는 `
 
 Graph는 row마다 SVG를 만들지 않고 visible history 전체 높이를 소유하는 하나의 responsive-width SVG overlay로 그린다. Scroll은 이 overlay를 table content와 함께 이동시킬 뿐 draw를 다시 실행하지 않는다. Table 또는 Inspector 폭이 바뀌면 표시 가능한 lane 수와 graph width를 다시 계산한다. History page나 Preset 결과가 바뀌면 visible commit topology를 먼저 완성한 뒤 overlay 하나를 교체해 기존 row와 새 row가 서로 다른 lane 좌표를 잠시 사용하는 상태를 만들지 않는다. Preset으로 중간 commit이 숨겨지면 hidden chain을 가장 가까운 visible ancestor로 collapse한 뒤 graph를 계산한다. Default chain의 first parent가 side lane에 이미 예약되어 있어도 lane 0으로 재배치하고 기존 side lane을 합류시켜 MR 사이의 default line을 유지한다.
 
-Commit 날짜 구분선은 현재 local calendar를 기준으로 최근 7일은 일별, 같은 해의 그 이전 history는 월별, 이전 해는 연별로 표시한다. 월별 label은 해당 월의 `1.`로, 연별 label은 해당 연도의 `1. 1.`로 정규화한다. Separator가 추가한 높이는 graph 좌표에도 반영하고 lane은 separator 아래까지 연속해서 그린다. 행을 선택하면 Inspector가 다음 정보를 제공한다.
+Commit 날짜 구분선은 현재 local calendar를 기준으로 최근 7일은 일별, 같은 해의 그 이전 history는 월별, 이전 해는 연별로 표시한다. 월별 label은 해당 월의 `1.`로, 연별 label은 해당 연도의 `1. 1.`로 정규화한다. Topology 제약으로 날짜 bucket이 과거로 내려갔다가 최신으로 되돌아오면 되돌아온 날짜 구분선을 다시 표시해 뒤의 commit이 오래된 구분선에 속한 것처럼 보이지 않게 한다. Separator가 추가한 높이는 graph 좌표에도 반영하고 lane은 separator 아래까지 연속해서 그린다. 행을 선택하면 Inspector가 다음 정보를 제공한다.
 
 - Full commit hash, commit message, author, date와 refs. Message는 첫 줄을 heading으로, 나머지 body와 trailer는 줄바꿈을 유지한 muted 본문 block으로 분리해 위계를 유지한다. Body가 길면 자체 scroll을 사용하며, 복사는 원문 전체를 대상으로 한다.
 - 직접 가리키는 ref가 없는 merge second-parent commit은 merge source를 `Branch`로 표시하고, 이를 복원할 근거가 없을 때만 local branch containment를 `Branches`로 표시

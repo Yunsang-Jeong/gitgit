@@ -60,7 +60,7 @@ func repositoryFingerprint(ctx context.Context, repository *gitexec.Repository) 
 }
 
 func historyCacheKey(request HistoryRequest, scope, related, head string, all bool, revisions []string) string {
-	return fmt.Sprintf("branch-boundary-v2\x00%t\x00%s\x00%s\x00%s\x00%s\x00%d\x00%d", all, scope, related, head, strings.Join(revisions, "\x00"), request.Limit, request.Skip)
+	return fmt.Sprintf("branch-boundary-v3\x00%t\x00%s\x00%s\x00%s\x00%s\x00%d\x00%d", all, scope, related, head, strings.Join(revisions, "\x00"), request.Limit, request.Skip)
 }
 
 func historyScopeCacheKey(root, scope, related, head string, all bool) string {

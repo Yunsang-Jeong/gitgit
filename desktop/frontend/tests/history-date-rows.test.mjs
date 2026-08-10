@@ -38,12 +38,28 @@ test('history uses daily, monthly, then yearly separators', () => {
     '2026. 7. 22.',
     null,
     '2026. 7. 21.',
-    null,
+    '2026. 7. 22.',
     '2026. 7. 16.',
     '2026. 7. 1.',
     null,
     '2026. 6. 1.',
     '2025. 1. 1.',
+    null,
+  ])
+})
+
+test('history repeats a date separator after a topology rebound without duplicating a continuous bucket', () => {
+  const rows = buildHistoryDateRows([
+    commit('newer', localDate(2026, 7, 22)),
+    commit('older', localDate(2026, 7, 21)),
+    commit('newer-rebound', localDate(2026, 7, 22)),
+    commit('newer-rebound-again', localDate(2026, 7, 22)),
+  ], new Date(2026, 6, 22, 12))
+
+  assert.deepEqual(rows.map((row) => row.separator?.label ?? null), [
+    '2026. 7. 22.',
+    '2026. 7. 21.',
+    '2026. 7. 22.',
     null,
   ])
 })

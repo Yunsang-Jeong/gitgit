@@ -97,6 +97,113 @@ func TestServiceOpensRepositoryAndEnrichesSearchResults(t *testing.T) {
 	}
 }
 
+func TestHistoryOrdersDivergentParentsByAuthorDateWithoutBreakingTopology(t *testing.T) {
+	repository := createRepository(t)
+
+	runGit(t, repository, nil, "switch", "-q", "-c", "feature/older")
+	writeFile(t, filepath.Join(repository, "feature.txt"), "older feature\n")
+	runGit(t, repository, nil, "add", "feature.txt")
+	olderDate := []string{
+		"GIT_AUTHOR_DATE=2026-07-03T10:00:00+09:00",
+		"GIT_COMMITTER_DATE=2026-07-03T10:00:00+09:00",
+	}
+	runGit(t, repository, olderDate, "commit", "-q", "-m", "feat: older side parent")
+	olderSide := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	runGit(t, repository, nil, "switch", "-q", "main")
+	writeFile(t, filepath.Join(repository, "main.txt"), "newer main\n")
+	runGit(t, repository, nil, "add", "main.txt")
+	newerDate := []string{
+		"GIT_AUTHOR_DATE=2026-07-10T10:00:00+09:00",
+		"GIT_COMMITTER_DATE=2026-07-10T10:00:00+09:00",
+	}
+	runGit(t, repository, newerDate, "commit", "-q", "-m", "feat: newer main parent")
+	newerMain := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	runGit(t, repository, nil, "switch", "-q", "feature/older")
+	mergeDate := []string{
+		"GIT_AUTHOR_DATE=2026-07-11T10:00:00+09:00",
+		"GIT_COMMITTER_DATE=2026-07-11T10:00:00+09:00",
+	}
+	runGit(t, repository, mergeDate, "merge", "-q", "--no-ff", "main", "-m", "merge: newer main into older side")
+	innerMerge := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	writeFile(t, filepath.Join(repository, "feature-after-merge.txt"), "feature after merge\n")
+	runGit(t, repository, nil, "add", "feature-after-merge.txt")
+	featureAfterMergeDate := []string{
+		"GIT_AUTHOR_DATE=2026-07-12T10:00:00+09:00",
+		"GIT_COMMITTER_DATE=2026-07-12T14:00:00+09:00",
+	}
+	runGit(t, repository, featureAfterMergeDate, "commit", "-q", "-m", "feat: continue older side after merge")
+	featureAfterMerge := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	runGit(t, repository, nil, "switch", "-q", "main")
+	writeFile(t, filepath.Join(repository, "main-after-merge.txt"), "main after side merge\n")
+	runGit(t, repository, nil, "add", "main-after-merge.txt")
+	mainAfterMergeDate := []string{
+		"GIT_AUTHOR_DATE=2026-07-12T12:00:00+09:00",
+		// Keep committer order opposite to author order so --date-order cannot satisfy this fixture.
+		"GIT_COMMITTER_DATE=2026-07-12T08:00:00+09:00",
+	}
+	runGit(t, repository, mainAfterMergeDate, "commit", "-q", "-m", "feat: continue newer main")
+	mainAfterMerge := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	outerMergeDate := []string{
+		"GIT_AUTHOR_DATE=2026-07-13T10:00:00+09:00",
+		"GIT_COMMITTER_DATE=2026-07-13T10:00:00+09:00",
+	}
+	runGit(t, repository, outerMergeDate, "merge", "-q", "--no-ff", "feature/older", "-m", "merge: completed older side")
+	outerMerge := gitOutput(t, repository, "rev-parse", "HEAD")
+	runGit(t, repository, nil, "branch", "-d", "feature/older")
+
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	history, err := service.History(context.Background(), HistoryRequest{Scope: "main", AllBranches: true, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	positions := make(map[string]int, len(history.Commits))
+	for index, commit := range history.Commits {
+		positions[commit.Commit] = index
+	}
+	outerMergeIndex, outerMergeFound := positions[outerMerge]
+	mainAfterMergeIndex, mainAfterMergeFound := positions[mainAfterMerge]
+	featureAfterMergeIndex, featureAfterMergeFound := positions[featureAfterMerge]
+	innerMergeIndex, innerMergeFound := positions[innerMerge]
+	newerIndex, newerFound := positions[newerMain]
+	olderIndex, olderFound := positions[olderSide]
+	if !outerMergeFound || !mainAfterMergeFound || !featureAfterMergeFound || !innerMergeFound || !newerFound || !olderFound {
+		t.Fatalf(
+			"divergent commits missing from history: outer=%t main-after=%t feature-after=%t inner=%t newer=%t older=%t",
+			outerMergeFound, mainAfterMergeFound, featureAfterMergeFound, innerMergeFound, newerFound, olderFound,
+		)
+	}
+	if !(outerMergeIndex < mainAfterMergeIndex && mainAfterMergeIndex < featureAfterMergeIndex && featureAfterMergeIndex < innerMergeIndex && innerMergeIndex < newerIndex && newerIndex < olderIndex) {
+		t.Fatalf(
+			"author-date history order = outer:%d main-after:%d feature-after:%d inner:%d newer:%d older:%d",
+			outerMergeIndex, mainAfterMergeIndex, featureAfterMergeIndex, innerMergeIndex, newerIndex, olderIndex,
+		)
+	}
+	mergeParents := history.Commits[innerMergeIndex].Parents
+	if len(mergeParents) != 2 || mergeParents[0] != olderSide || mergeParents[1] != newerMain {
+		t.Fatalf("merge parents = %v, want older side first and newer main second", mergeParents)
+	}
+	if history.Commits[newerIndex].Date != "2026-07-10T10:00:00+09:00" || history.Commits[olderIndex].Date != "2026-07-03T10:00:00+09:00" {
+		t.Fatalf("history author dates = newer:%q older:%q", history.Commits[newerIndex].Date, history.Commits[olderIndex].Date)
+	}
+	for _, commit := range history.Commits {
+		childIndex := positions[commit.Commit]
+		for _, parent := range commit.Parents {
+			if parentIndex, loaded := positions[parent]; loaded && childIndex >= parentIndex {
+				t.Fatalf("parent %s appeared before child %s: parent=%d child=%d", parent, commit.Commit, parentIndex, childIndex)
+			}
+		}
+	}
+}
+
 func TestHistoryCacheReturnsIndependentValuesAndInvalidatesBranchMembership(t *testing.T) {
 	repository := createRepository(t)
 	service := NewService(nil)

@@ -7,10 +7,6 @@ export type HistoryDateSeparator = {
   label: string
 }
 
-type OrderedHistoryDateSeparator = HistoryDateSeparator & {
-  order: number
-}
-
 export type HistoryDateRow = {
   commit: CommitSummary
   separator: HistoryDateSeparator | null
@@ -25,7 +21,7 @@ function calendarStart(value: Date): Date {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate())
 }
 
-function dateSeparator(value: string, now: Date): OrderedHistoryDateSeparator | null {
+function dateSeparator(value: string, now: Date): HistoryDateSeparator | null {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return null
 
@@ -37,22 +33,20 @@ function dateSeparator(value: string, now: Date): OrderedHistoryDateSeparator | 
   const month = date.getMonth() + 1
 
   if (commitDay >= recentStart) {
-    return { key: `day:${year}-${month}-${date.getDate()}`, label: `${year}. ${month}. ${date.getDate()}.`, order: commitDay.getTime() }
+    return { key: `day:${year}-${month}-${date.getDate()}`, label: `${year}. ${month}. ${date.getDate()}.` }
   }
   if (year === now.getFullYear()) {
-    return { key: `month:${year}-${month}`, label: `${year}. ${month}. 1.`, order: new Date(year, date.getMonth(), 1).getTime() }
+    return { key: `month:${year}-${month}`, label: `${year}. ${month}. 1.` }
   }
-  return { key: `year:${year}`, label: `${year}. 1. 1.`, order: new Date(year, 0, 1).getTime() }
+  return { key: `year:${year}`, label: `${year}. 1. 1.` }
 }
 
 export function buildHistoryDateRows(commits: CommitSummary[], now = new Date()): HistoryDateRow[] {
-  let lastSeparatorOrder = Number.POSITIVE_INFINITY
+  let previousSeparatorKey = ''
   return commits.map((commit) => {
     const candidate = dateSeparator(commit.date, now)
-    const separator = candidate && candidate.order < lastSeparatorOrder
-      ? { key: candidate.key, label: candidate.label }
-      : null
-    if (candidate && separator) lastSeparatorOrder = candidate.order
+    const separator = candidate && candidate.key !== previousSeparatorKey ? candidate : null
+    if (candidate) previousSeparatorKey = candidate.key
     return { commit, separator }
   })
 }

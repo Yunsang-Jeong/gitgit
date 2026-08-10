@@ -576,7 +576,7 @@ func (s *Service) History(ctx context.Context, request HistoryRequest) (HistoryR
 	}
 
 	args := []string{
-		"log", "--topo-order", "-z", "--date=iso-strict",
+		"log", "--author-date-order", "-z", "--date=iso-strict",
 		"--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%B%x00%D",
 	}
 	if request.Skip > 0 || branchPoint == "" {

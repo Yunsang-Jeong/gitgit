@@ -94,7 +94,7 @@ func TestPersistentCacheIsSharedAcrossLinkedWorktrees(t *testing.T) {
 	wrapper := filepath.Join(t.TempDir(), "git-wrapper")
 	wrapperSource := `#!/bin/sh
 case " $* " in
-  *" log --topo-order "*|*" branch --all --contains "*|*" show "*)
+  *" log --author-date-order "*|*" branch --all --contains "*|*" show "*)
     echo "persistent cache miss triggered an expensive Git read" >&2
     exit 91
     ;;
