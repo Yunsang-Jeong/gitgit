@@ -2,7 +2,7 @@
 
 개인적인 Git 이용 패턴과 취향이 뒤섞인 프로젝트이다.
 
-- **Commit**: worktree, branch를 선택하고 commit을 열람하고 수정할 수 있다.
+- **Commit**: worktree, branch를 선택하고 commit을 열람하며, 제한된 local history의 순서와 metadata를 수정할 수 있다. Changed files와 diff는 현재 read-only다.
 - **Worktree**: 연결된 worktree의 branch, path, dirty/locked/sparse/merge 상태를 비교하고 정리한다.
 - **Search**: 정밀한 blame을 위해 조금은 변태같이 commit을 뒤적거린다.
 
