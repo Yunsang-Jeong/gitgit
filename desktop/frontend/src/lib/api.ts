@@ -1,4 +1,4 @@
-import type { CommitDetail, CommitEditStack, CommitEditTarget, CommitFileContent, HistoryBranchesResponse, HistoryRequest, HistoryResponse, ProjectDiscoveryResult, ProjectPruneResult, RegisteredProject, RemoteSyncResult, RepositoryState, RepositoryTreeResponse, RewriteCommitsRequest, RewriteCommitsResponse, SearchProgress, SearchRequest, SearchResponse } from './types'
+import type { CommitDetail, CommitEditStack, CommitEditTarget, CommitFileContent, HistoryBranchesResponse, HistoryRequest, HistoryResponse, ProjectDiscoveryResult, ProjectPruneResult, RegisteredProject, RemoteBranchesResponse, RemoteSyncResult, RepositoryState, RepositoryTreeResponse, RewriteCommitsRequest, RewriteCommitsResponse, SearchProgress, SearchRequest, SearchResponse } from './types'
 
 type Backend = {
   Version: () => Promise<string>
@@ -14,6 +14,7 @@ type Backend = {
   Refresh: () => Promise<RepositoryState>
   SyncRemotes: () => Promise<RemoteSyncResult>
   PullCurrentBranch: () => Promise<RemoteSyncResult>
+  RemoteBranches: (remote: string) => Promise<RemoteBranchesResponse>
   History: (request: HistoryRequest) => Promise<HistoryResponse>
   HistoryBranches: (commits: string[]) => Promise<HistoryBranchesResponse>
   CommitDetail: (commit: string, file: string) => Promise<CommitDetail>
@@ -71,6 +72,7 @@ export const api = {
   refresh: () => backend().Refresh(),
   syncRemotes: () => backend().SyncRemotes(),
   pullCurrentBranch: () => backend().PullCurrentBranch(),
+  remoteBranches: (remote: string) => backend().RemoteBranches(remote),
   history: (request: HistoryRequest) => backend().History(request),
   historyBranches: (commits: string[]) => backend().HistoryBranches(commits),
   commitDetail: (commit: string, file = '') => backend().CommitDetail(commit, file),

@@ -685,6 +685,92 @@ func historyMessages(history HistoryResponse) []string {
 	return messages
 }
 
+func TestRemoteBranchesReadsLocalRefsAndPreservesRepositoryState(t *testing.T) {
+	repository := createRepository(t)
+	runGit(t, repository, nil, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing-origin.git"))
+	head := gitOutput(t, repository, "rev-parse", "HEAD")
+	parent := gitOutput(t, repository, "rev-parse", "HEAD^")
+	runGit(t, repository, nil, "update-ref", "refs/remotes/origin/main", head)
+	runGit(t, repository, nil, "update-ref", "refs/remotes/origin/feature/remote-only", parent)
+	runGit(t, repository, nil, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	before := observeRepository(t, repository)
+	response, err := service.RemoteBranches(context.Background(), "origin")
+	if err != nil {
+		t.Fatalf("read remote branches: %v", err)
+	}
+	want := RemoteBranchesResponse{
+		Remote:        "origin",
+		DefaultBranch: "main",
+		Count:         2,
+		Branches: []RemoteBranchInfo{
+			{Name: "feature/remote-only", Ref: "refs/remotes/origin/feature/remote-only"},
+			{Name: "main", Ref: "refs/remotes/origin/main", Default: true},
+		},
+	}
+	if !reflect.DeepEqual(response, want) {
+		t.Fatalf("remote branches = %#v, want %#v", response, want)
+	}
+	if after := observeRepository(t, repository); !reflect.DeepEqual(after, before) {
+		t.Fatalf("remote branch read changed repository state:\nbefore: %#v\nafter:  %#v", before, after)
+	}
+}
+
+func TestRemoteBranchesIsolatesRemotesAndAllowsMissingSymbolicHEAD(t *testing.T) {
+	repository := createRepository(t)
+	runGit(t, repository, nil, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing-origin.git"))
+	runGit(t, repository, nil, "remote", "add", "upstream", filepath.Join(t.TempDir(), "missing-upstream.git"))
+	head := gitOutput(t, repository, "rev-parse", "HEAD")
+	parent := gitOutput(t, repository, "rev-parse", "HEAD^")
+	runGit(t, repository, nil, "update-ref", "refs/remotes/origin/main", head)
+	runGit(t, repository, nil, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	runGit(t, repository, nil, "update-ref", "refs/remotes/upstream/main", parent)
+	runGit(t, repository, nil, "update-ref", "refs/remotes/upstream/release/v1", head)
+
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	origin, err := service.RemoteBranches(context.Background(), "origin")
+	if err != nil {
+		t.Fatalf("read origin branches: %v", err)
+	}
+	if origin.Count != 1 || origin.DefaultBranch != "main" || origin.Branches[0].Ref != "refs/remotes/origin/main" || !origin.Branches[0].Default {
+		t.Fatalf("origin branches = %#v", origin)
+	}
+
+	upstream, err := service.RemoteBranches(context.Background(), "upstream")
+	if err != nil {
+		t.Fatalf("read upstream branches: %v", err)
+	}
+	if upstream.Remote != "upstream" || upstream.DefaultBranch != "" || upstream.Count != 2 {
+		t.Fatalf("upstream summary = %#v", upstream)
+	}
+	for _, branch := range upstream.Branches {
+		if branch.Default || !strings.HasPrefix(branch.Ref, "refs/remotes/upstream/") {
+			t.Fatalf("upstream branch leaked another remote or default marker: %#v", branch)
+		}
+	}
+}
+
+func TestRemoteBranchesRejectsUnknownRemote(t *testing.T) {
+	repository := createRepository(t)
+	service := NewService(nil)
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	if _, err := service.RemoteBranches(context.Background(), "missing"); err == nil || !strings.Contains(err.Error(), `remote "missing" is not configured`) {
+		t.Fatalf("unknown remote error = %v", err)
+	}
+	if _, err := service.RemoteBranches(context.Background(), " "); err == nil || !strings.Contains(err.Error(), "remote name is required") {
+		t.Fatalf("empty remote error = %v", err)
+	}
+}
+
 func TestAllHistoryIncludesLocalBranchesAndMatchingRemoteDefaultBranches(t *testing.T) {
 	repository := createRepository(t)
 	runGit(t, repository, nil, "remote", "add", "origin", "https://github.com/hashicorp/example.git")
@@ -1342,4 +1428,23 @@ func gitOutput(t *testing.T, directory string, args ...string) string {
 		t.Fatalf("git %v: %v\n%s", args, err, output)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+type repositoryObservation struct {
+	HEAD      string
+	Branch    string
+	Status    string
+	Refs      string
+	Worktrees string
+}
+
+func observeRepository(t *testing.T, repository string) repositoryObservation {
+	t.Helper()
+	return repositoryObservation{
+		HEAD:      gitOutput(t, repository, "rev-parse", "HEAD"),
+		Branch:    gitOutput(t, repository, "symbolic-ref", "--quiet", "--short", "HEAD"),
+		Status:    gitOutput(t, repository, "status", "--porcelain=v2", "-z"),
+		Refs:      gitOutput(t, repository, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)"),
+		Worktrees: gitOutput(t, repository, "worktree", "list", "--porcelain"),
+	}
 }

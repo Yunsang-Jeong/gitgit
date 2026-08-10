@@ -5099,8 +5099,63 @@ kbd {
   color: #dda64d;
 }
 
+.scope-badge.unavailable {
+  background: #3a1f23;
+  color: #e59098;
+}
+
 .scope-badge.muted {
   color: #7f929a;
+}
+
+.scope-option-group {
+  margin: 4px 4px 2px;
+  padding: 5px 5px 3px;
+  border-top: 1px solid var(--border);
+  color: #70858e;
+  font-size: var(--font-micro);
+  font-weight: 750;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.scope-option-group.remote {
+  color: #7594aa;
+}
+
+.scope-option-copy.remote strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scope-picker-inline-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 3px 5px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #0e191e;
+  color: var(--text-muted);
+  font-size: var(--font-label);
+}
+
+.scope-picker-inline-state.error {
+  border-color: #63383c;
+  color: #d9979c;
+}
+
+.branch-scope-menu .scope-picker-inline-state button {
+  display: inline-flex;
+  width: auto;
+  height: 22px;
+  min-height: 22px;
+  padding: 0 7px;
+  border-color: #63383c;
+  color: #d9a3a7;
 }
 
 .scope-picker-empty,
@@ -6192,6 +6247,173 @@ button.repository-tree-row {
 .settings-remote-section code {
   color: #9cc9e5;
   font-size: var(--font-label);
+}
+
+.settings-remote-catalog {
+  display: flex;
+  margin-top: var(--space-3);
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-remote-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #0f191e;
+}
+
+.settings-remote-card.error {
+  border-color: #61383c;
+}
+
+.settings-remote-card > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 46px;
+  padding: var(--space-2) var(--space-3);
+  background: #111d22;
+  color: var(--text-soft);
+  cursor: pointer;
+  list-style-position: outside;
+}
+
+.settings-remote-card[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-remote-summary-copy {
+  display: grid;
+  grid-template-columns: 18px auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.settings-remote-summary-copy strong {
+  color: #d6e1e5;
+  font-size: var(--font-meta);
+}
+
+.settings-remote-summary-copy small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-remote-summary-facts {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-remote-summary-facts b,
+.settings-remote-branches li b {
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: #1c2b32;
+  color: #91a6ae;
+  font-size: var(--font-micro);
+  font-weight: 700;
+}
+
+.settings-remote-summary-facts b.error {
+  background: #3a1f23;
+  color: #e59098;
+}
+
+.settings-remote-branches {
+  padding: var(--space-2);
+}
+
+.settings-remote-search {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-label);
+}
+
+.settings-remote-search input {
+  width: 100%;
+  height: var(--control-height-compact);
+  min-height: var(--control-height-compact);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: #101c22;
+  color: var(--text-soft);
+  font-size: var(--font-meta);
+}
+
+.settings-remote-branches ul {
+  max-height: 220px;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  list-style: none;
+}
+
+.settings-remote-branches li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-remote-branches li:last-child {
+  border-bottom: 0;
+}
+
+.settings-remote-branches li code {
+  overflow: hidden;
+  color: #a9c8dc;
+  font-size: var(--font-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-remote-state,
+.settings-remote-error {
+  padding: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-meta);
+  text-align: center;
+}
+
+.settings-remote-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: #d9979c;
+  text-align: left;
+}
+
+.settings-remote-error button,
+.settings-remote-more {
+  height: var(--control-height-compact);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: #121f25;
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: var(--font-label);
+}
+
+.settings-remote-more {
+  margin-top: var(--space-2);
 }
 
 .settings-remote-detected {

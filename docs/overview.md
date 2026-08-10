@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: overview
 scope: project
-last_updated: 2026-07-28
+last_updated: 2026-08-07
 ---
 
 # GitGit Overview
@@ -63,6 +63,16 @@ GitGit이 우선하는 방향은 세 가지다.
 - 결과는 file-level backend match를 commit 단위 한 행으로 합쳐 표시하고, compact session sidebar와 Inspector를 함께 제공해 선택한 commit의 changed files와 diff를 조사한다.
 
 상세 규칙은 [Search](search.md)를 따른다.
+
+### Remote branches
+
+- Settings에서 현재 repository의 remote와 local `refs/remotes/*`에 이미 존재하는 remote-tracking branch를 확인한다.
+- Commit과 Search의 Branch selector는 local branch와 remote branch를 분리해 보여 주고, 선택한 exact remote ref 하나를 read-only history scope로 사용한다.
+- Remote 목록은 Settings open 또는 Branch selector open에서 지연 조회한다. Settings open, remote branch 조회와 선택은 network fetch, checkout, local tracking branch나 worktree 생성, commit rewrite, push 또는 삭제를 수행하지 않는다.
+- `Refresh`, `Sync`와 `Pull` 뒤에는 in-memory remote catalog를 무효화하고 필요한 목록을 다시 읽는다. Network를 통한 remote ref 갱신은 Commit의 명시적인 `Sync`만 담당한다.
+- `All branches`의 기존 local branch와 matching remote default branch 범위는 유지한다. 모든 fetched remote branch를 자동으로 포함하지 않는다.
+
+상세 동작과 상태·오류 경계는 [Remote branches](remote-branches.md)를 따른다.
 
 ## Architecture
 

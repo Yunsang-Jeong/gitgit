@@ -28,6 +28,7 @@
   import { visibleCommits } from './lib/history'
   import { cloneFilterPresets, defaultFilterLogic, defaultFilterPresets, limitFilterPresets, resolvePresetRules } from './lib/presets'
   import { defaultRemoteBadgeRules, normalizeRemoteBadgeIcon } from './lib/remotes'
+  import { isRemoteBranchScope, remoteBranchLabel, remoteRelatedScope } from './lib/remote-branches'
   import { groupSearchResultsByCommit, searchResultCommitCount } from './lib/search-results'
   import { searchExpressionError, searchPatternText } from './lib/search-expression'
   import type {
@@ -49,6 +50,7 @@
     Pattern,
     RegisteredProject,
     RemoteBadgeRule,
+    RemoteBranchCatalogEntry,
     RepositoryState,
     RepositoryTreeResponse,
     RewriteCommitsRequest,
@@ -142,6 +144,10 @@
   let refreshing = false
   let syncing = false
   let pulling = false
+  let remoteBranchCatalog: RemoteBranchCatalogEntry[] = []
+  let remoteCatalogGeneration = 0
+  let remoteCatalogRequestSequence = 0
+  const remoteCatalogRequests = new Map<string, number>()
   let statusMessage = ''
   let statusKind: StatusKind = 'info'
   let settingsOpen = false
@@ -242,11 +248,13 @@
   $: inspectorFileRevision = repository ? (historyAllBranches ? repository.default_branch : historyScope) : ''
   $: repositoryTransitioning = projectSwitching || worktreeSwitching
   $: currentWorktreeDetached = Boolean(repository && (repository.worktrees.find((worktree) => worktree.path === repository?.root)?.detached ?? repository.branch === 'detached'))
-  $: editDisabledReason = commitEditDisabledReason({
-    hasRepository: Boolean(repository),
-    projectSwitching,
-    worktreeSwitching,
-  })
+  $: editDisabledReason = !historyAllBranches && isRemoteBranchScope(historyScope)
+    ? 'Remote branch history is read-only. Select a local branch before entering Edit Mode.'
+    : commitEditDisabledReason({
+      hasRepository: Boolean(repository),
+      projectSwitching,
+      worktreeSwitching,
+    })
   $: canEditCommits = editDisabledReason === ''
   $: searchDraft = {
     patterns: patterns.map((pattern) => ({ ...pattern })),
@@ -293,7 +301,7 @@
     const keydown = (event: KeyboardEvent) => {
       if (event.metaKey && event.key === ',') {
         event.preventDefault()
-        settingsOpen = true
+        openSettings()
       }
     }
     window.addEventListener('keydown', keydown)
@@ -331,6 +339,7 @@
 
   async function activateRepository(state: RepositoryState, projectRoot = state.project_root || state.root, initialHistoryScope?: string): Promise<void> {
     repository = state
+    resetRemoteBranchCatalog(state)
     activeProjectRoot = projectRoot
     historyAllBranches = initialHistoryScope === undefined
     historyScope = initialHistoryScope ?? state.default_branch ?? 'HEAD'
@@ -343,7 +352,72 @@
     projectSwitching = false
     worktreeSwitching = false
     historyLoading = false
+    if (settingsOpen) void ensureRemoteBranches()
     await loadHistory()
+  }
+
+  function resetRemoteBranchCatalog(state: RepositoryState | null = repository): void {
+    remoteCatalogGeneration += 1
+    remoteCatalogRequests.clear()
+    remoteBranchCatalog = (state?.remotes ?? []).map((remote) => ({
+      remote,
+      count: 0,
+      branches: [],
+      loading: false,
+      loaded: false,
+    }))
+  }
+
+  function updateRemoteCatalogEntry(remote: string, update: (entry: RemoteBranchCatalogEntry) => RemoteBranchCatalogEntry): void {
+    remoteBranchCatalog = remoteBranchCatalog.map((entry) => entry.remote.name === remote ? update(entry) : entry)
+  }
+
+  function ensureRemoteBranches(remote = '', force = false): Promise<void> {
+    const targets = remoteBranchCatalog.filter((entry) => (
+      (!remote || entry.remote.name === remote)
+      && !entry.loading
+      && (force || (!entry.loaded && !entry.error))
+    ))
+    if (targets.length === 0) return Promise.resolve()
+    return Promise.all(targets.map((entry) => loadRemoteBranches(entry.remote.name))).then(() => undefined)
+  }
+
+  async function loadRemoteBranches(remote: string): Promise<void> {
+    const generation = remoteCatalogGeneration
+    const repositoryRoot = repository?.root ?? ''
+    const requestID = ++remoteCatalogRequestSequence
+    remoteCatalogRequests.set(remote, requestID)
+    updateRemoteCatalogEntry(remote, (entry) => ({ ...entry, loading: true, error: undefined }))
+    try {
+      const response = await api.remoteBranches(remote)
+      if (generation !== remoteCatalogGeneration || repository?.root !== repositoryRoot || remoteCatalogRequests.get(remote) !== requestID) return
+      updateRemoteCatalogEntry(remote, (entry) => ({
+        ...entry,
+        default_branch: response.default_branch,
+        count: response.count,
+        branches: response.branches ?? [],
+        loading: false,
+        loaded: true,
+        error: undefined,
+      }))
+    } catch (error) {
+      if (generation !== remoteCatalogGeneration || repository?.root !== repositoryRoot || remoteCatalogRequests.get(remote) !== requestID) return
+      updateRemoteCatalogEntry(remote, (entry) => ({
+        ...entry,
+        loading: false,
+        loaded: false,
+        error: errorText(error),
+      }))
+    }
+  }
+
+  function retryRemoteBranches(remote: string): void {
+    void ensureRemoteBranches(remote, true)
+  }
+
+  function openSettings(): void {
+    settingsOpen = true
+    void ensureRemoteBranches()
   }
 
   async function loadHistory(): Promise<void> {
@@ -441,6 +515,7 @@
 
   function relatedHistoryScope(): string {
     if (!repository || historyAllBranches || historyScope === repository.default_branch) return ''
+    if (isRemoteBranchScope(historyScope)) return remoteRelatedScope(historyScope, remoteBranchCatalog)
     return repository.default_branch
   }
 
@@ -450,6 +525,7 @@
     selectedCommit = ''
     historyDetail = null
     detailOverride = null
+    if (!nextAllBranches && isRemoteBranchScope(nextScope)) await ensureRemoteBranches()
     await loadHistory()
   }
 
@@ -1225,6 +1301,9 @@
       const state = await api.refresh()
       if (repository?.root !== repositoryRoot) return
       repository = state
+      resetRemoteBranchCatalog(state)
+      if (isRemoteBranchScope(historyScope)) await ensureRemoteBranches()
+      else if (settingsOpen) void ensureRemoteBranches()
       await loadHistory()
     } catch (error) {
       if (repository?.root === repositoryRoot) setStatus(errorText(error), 'error')
@@ -1243,6 +1322,9 @@
       const result = await api.syncRemotes()
       if (requestID !== syncRequestID || repository?.root !== repositoryRoot) return
       repository = result.state
+      resetRemoteBranchCatalog(result.state)
+      if (isRemoteBranchScope(historyScope)) await ensureRemoteBranches()
+      else if (settingsOpen) void ensureRemoteBranches()
       if (result.warnings?.length) setStatus(result.warnings.join(' · '), 'warning')
       else setStatus('Remote sync complete.', 'success')
       await loadHistory()
@@ -1265,6 +1347,9 @@
       const result = await api.pullCurrentBranch()
       if (requestID !== pullRequestID || repository?.root !== repositoryRoot) return
       repository = result.state
+      resetRemoteBranchCatalog(result.state)
+      if (isRemoteBranchScope(historyScope)) await ensureRemoteBranches()
+      else if (settingsOpen) void ensureRemoteBranches()
       if (result.warnings?.length) setStatus(result.warnings.join(' · '), 'warning')
       else setStatus('Current branch pulled.', 'success')
       await loadHistory()
@@ -1911,7 +1996,7 @@
     onRefresh={() => void refreshRepository()}
     onSync={() => void syncRemotes()}
     onPull={() => void pullCurrentBranch()}
-    onOpenSettings={() => (settingsOpen = true)}
+    onOpenSettings={openSettings}
     onViewChange={(view) => void changeNavigatorView(view)}
   />
 
@@ -1921,6 +2006,9 @@
         scope={historyScope}
         allBranches={historyAllBranches}
         branches={history.branches}
+        {remoteBranchCatalog}
+        remotes={repository?.remotes ?? []}
+        remoteBadgeRules={appSettings.remote_badges}
         worktrees={repository?.worktrees ?? []}
         defaultBranch={repository?.default_branch ?? ''}
         currentBranch={repository?.branch ?? ''}
@@ -1938,6 +2026,8 @@
         editModeActionDisabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing || editReviewing || editApplying}
         worktreeActionsDisabled={!repository || historyLoading || historyLoadingMore || repositoryTransitioning || editModePreparing || editModeOpen}
         onScopeChange={(nextScope, nextAllBranches) => void changeHistoryScope(nextScope, nextAllBranches)}
+        onOpenBranches={() => void ensureRemoteBranches()}
+        onRetryRemote={retryRemoteBranches}
         onWorktreeChange={(worktree) => void selectWorktree(worktree)}
         onTogglePreset={togglePreset}
         onEnterEditMode={startEditMode}
@@ -2054,7 +2144,7 @@
           allBranches={historyAllBranches}
           remotes={repository?.remotes ?? []}
           remoteBadgeRules={appSettings.remote_badges}
-          showRemoteBadges={historyAllBranches}
+          showRemoteBadges={historyAllBranches || isRemoteBranchScope(historyScope)}
           rules={filterRules}
           logic={appSettings.filter_logic}
           {selectedCommit}
@@ -2122,6 +2212,8 @@
         {projects}
         {activeProjectRoot}
         branches={history.branches}
+        {remoteBranchCatalog}
+        remoteBadgeRules={appSettings.remote_badges}
         bind:patterns
         bind:engine
         bind:scope
@@ -2150,6 +2242,8 @@
         onUnregisterProject={requestProjectUnregister}
         onWorktreeChange={(worktree) => void selectSearchWorktree(worktree)}
         onScopeChange={changeSearchScope}
+        onOpenBranches={() => void ensureRemoteBranches()}
+        onRetryRemote={retryRemoteBranches}
         onRunSearch={() => void runSearch()}
         onCancelSearch={() => void cancelSearch()}
         onSelectResult={selectSearchResult}
@@ -2180,7 +2274,7 @@
     repositoryOpen={Boolean(repository)}
     view={navigatorView}
     {searching}
-    scope={navigatorView === 'search' && executedSearchDraft ? resultScope : navigatorView === 'search' ? scope : history.scope}
+    scope={remoteBranchLabel(navigatorView === 'search' && executedSearchDraft ? resultScope : navigatorView === 'search' ? scope : history.scope)}
     scanned={navigatorView === 'search' ? scanned : history.total}
     count={navigatorView === 'worktrees' ? repository?.worktrees.length ?? 0 : navigatorView === 'search' ? groupedSearchResults.length : filteredCommits.length}
     loaded={history.commits.length}
@@ -2199,6 +2293,8 @@
     changedFilesView={appSettings.changed_files_view}
     presets={appSettings.presets}
     remotes={repository?.remotes ?? []}
+    {remoteBranchCatalog}
+    repositoryOpen={Boolean(repository)}
     remoteBadgeRules={appSettings.remote_badges}
     discovering={discoveringProjects}
     {pruningProjects}
@@ -2217,6 +2313,7 @@
     onPresetsChange={updatePresets}
     onResetPresets={resetPresets}
     onRemoteBadgeRulesChange={updateRemoteBadges}
+    onRetryRemote={retryRemoteBranches}
   />
   {#if projectPendingRemoval}
     <div class="project-remove-backdrop" role="presentation" on:mousedown={() => !removingProject && (projectPendingRemoval = null)}>

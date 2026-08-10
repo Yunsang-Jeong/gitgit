@@ -132,6 +132,19 @@ type RemoteInfo struct {
 	URL  string `json:"url"`
 }
 
+type RemoteBranchInfo struct {
+	Name    string `json:"name"`
+	Ref     string `json:"ref"`
+	Default bool   `json:"default"`
+}
+
+type RemoteBranchesResponse struct {
+	Remote        string             `json:"remote"`
+	DefaultBranch string             `json:"default_branch,omitempty"`
+	Count         int                `json:"count"`
+	Branches      []RemoteBranchInfo `json:"branches"`
+}
+
 type RemoteSyncResult struct {
 	State    RepositoryState `json:"state"`
 	Warnings []string        `json:"warnings,omitempty"`
@@ -219,6 +232,75 @@ func (s *Service) Current(ctx context.Context) (RepositoryState, error) {
 		return RepositoryState{}, err
 	}
 	return s.snapshot(operationContext, repository)
+}
+
+// RemoteBranches reads only the remote-tracking refs already present in the
+// local repository. It never contacts a remote or changes refs, branches, or
+// the active worktree.
+func (s *Service) RemoteBranches(ctx context.Context, remote string) (RemoteBranchesResponse, error) {
+	operationContext, finish := s.beginOperation(ctx)
+	defer finish()
+	repository, err := s.currentRepository()
+	if err != nil {
+		return RemoteBranchesResponse{}, err
+	}
+
+	remote = strings.TrimSpace(remote)
+	if remote == "" {
+		return RemoteBranchesResponse{}, errors.New("remote name is required")
+	}
+	remoteOutput, err := repository.Run(operationContext, nil, "remote")
+	if err != nil {
+		return RemoteBranchesResponse{}, fmt.Errorf("list remotes: %w", err)
+	}
+	found := false
+	for _, name := range strings.Fields(string(remoteOutput)) {
+		if name == remote {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return RemoteBranchesResponse{}, fmt.Errorf("remote %q is not configured", remote)
+	}
+
+	refPrefix := "refs/remotes/" + remote + "/"
+	defaultRef := ""
+	if output, symbolicErr := repository.Run(operationContext, nil, "symbolic-ref", "--quiet", refPrefix+"HEAD"); symbolicErr == nil {
+		candidate := strings.TrimSpace(string(output))
+		if strings.HasPrefix(candidate, refPrefix) && candidate != refPrefix+"HEAD" {
+			defaultRef = candidate
+		}
+	} else if err := operationContext.Err(); err != nil {
+		return RemoteBranchesResponse{}, err
+	}
+
+	refsOutput, err := repository.Run(operationContext, nil, "for-each-ref", "--format=%(refname)", refPrefix)
+	if err != nil {
+		return RemoteBranchesResponse{}, fmt.Errorf("list branches for remote %q: %w", remote, err)
+	}
+	branches := make([]RemoteBranchInfo, 0)
+	defaultBranch := ""
+	for _, ref := range strings.Split(string(refsOutput), "\n") {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || ref == refPrefix+"HEAD" || !strings.HasPrefix(ref, refPrefix) {
+			continue
+		}
+		name := strings.TrimPrefix(ref, refPrefix)
+		if name == "" {
+			continue
+		}
+		isDefault := ref == defaultRef
+		if isDefault {
+			defaultBranch = name
+		}
+		branches = append(branches, RemoteBranchInfo{Name: name, Ref: ref, Default: isDefault})
+	}
+	sort.Slice(branches, func(left, right int) bool { return branches[left].Name < branches[right].Name })
+
+	return RemoteBranchesResponse{
+		Remote: remote, DefaultBranch: defaultBranch, Count: len(branches), Branches: branches,
+	}, nil
 }
 
 func (s *Service) SyncRemotes(ctx context.Context) (RemoteSyncResult, error) {

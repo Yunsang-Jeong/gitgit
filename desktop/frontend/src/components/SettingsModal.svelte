@@ -1,8 +1,9 @@
 <script lang="ts">
   import RemoteBadgeIcon from './RemoteBadgeIcon.svelte'
+  import RemoteCatalogSection from './RemoteCatalogSection.svelte'
   import { maxFilterPresets } from '../lib/presets'
   import { isEmbeddedRemoteBadgeIcon, normalizeRemoteBadgeIcon, remoteBadgeIconOptions, resolveRefBadge } from '../lib/remotes'
-  import type { ChangedFilesView, CommitFilterAction, CommitFilterField, CommitFilterPreset, IDEPreference, RegisteredProject, RemoteBadgeRule, RemoteInfo, TerminalPreference } from '../lib/types'
+  import type { ChangedFilesView, CommitFilterAction, CommitFilterField, CommitFilterPreset, IDEPreference, RegisteredProject, RemoteBadgeRule, RemoteBranchCatalogEntry, RemoteInfo, TerminalPreference } from '../lib/types'
 
   export let open = false
   export let projects: RegisteredProject[] = []
@@ -12,6 +13,8 @@
   export let changedFilesView: ChangedFilesView = 'list'
   export let presets: CommitFilterPreset[] = []
   export let remotes: RemoteInfo[] = []
+  export let remoteBranchCatalog: RemoteBranchCatalogEntry[] = []
+  export let repositoryOpen = false
   export let remoteBadgeRules: RemoteBadgeRule[] = []
   export let discovering = false
   export let pruningProjects = false
@@ -30,6 +33,7 @@
   export let onPresetsChange: (value: CommitFilterPreset[]) => void
   export let onResetPresets: () => void
   export let onRemoteBadgeRulesChange: (value: RemoteBadgeRule[]) => void
+  export let onRetryRemote: (remote: string) => void = () => undefined
 
   let discoveryDialogOpen = false
   let discoveryDirectory = ''
@@ -293,11 +297,13 @@
           </div>
         </section>
 
+        <RemoteCatalogSection catalog={remoteBranchCatalog} {repositoryOpen} remoteBadgeRules={remoteBadgeRules} {onRetryRemote} />
+
         <section class="settings-section settings-remote-section">
           <div class="settings-section-heading">
             <div>
-              <h2>Remote badges</h2>
-              <p>Match a remote URL by substring and choose the embedded icon shown in the All branches commit view.</p>
+              <h2>Remote appearance</h2>
+              <p>Match a remote URL by substring and choose the embedded icon shown with remote refs.</p>
             </div>
             <div class="settings-project-actions">
               <button class="primary" type="button" on:click={addRemoteBadgeRule}>＋ Add mapping</button>

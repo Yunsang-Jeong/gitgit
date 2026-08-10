@@ -8,6 +8,13 @@ import {
   orderedBranches,
   worktreeHistoryScope,
 } from '../src/lib/branch-options.ts'
+import {
+  isRemoteBranchScope,
+  remoteBranchLabel,
+  remoteRelatedScope,
+  remoteScopeUnavailable,
+  visibleRemoteBranches,
+} from '../src/lib/remote-branches.ts'
 
 test('branch options keep default first, current second, and do not mutate input', () => {
   const branches = ['feature/zeta', 'release/2', 'main', 'feature/alpha', 'release/1', 'feature/zeta']
@@ -54,4 +61,38 @@ test('worktree selection follows an attached branch and uses HEAD when detached'
   assert.equal(worktreeHistoryScope('detached'), 'detached')
   assert.equal(worktreeHistoryScope('detached', true), 'HEAD')
   assert.equal(worktreeHistoryScope(undefined), 'HEAD')
+})
+
+const remoteCatalog = [{
+  remote: { name: 'origin', url: 'https://example.com/repo.git' },
+  default_branch: 'main',
+  count: 2,
+  loaded: true,
+  loading: false,
+  branches: [
+    { name: 'main', ref: 'refs/remotes/origin/main', default: true },
+    { name: 'feature/search', ref: 'refs/remotes/origin/feature/search', default: false },
+  ],
+}]
+
+test('remote branch helpers keep exact refs while presenting compact labels', () => {
+  assert.equal(isRemoteBranchScope('refs/remotes/origin/feature/search'), true)
+  assert.equal(isRemoteBranchScope('origin/feature/search'), false)
+  assert.equal(remoteBranchLabel('refs/remotes/origin/feature/search'), 'origin/feature/search')
+  assert.deepEqual(visibleRemoteBranches(remoteCatalog).map((branch) => branch.ref), [
+    'refs/remotes/origin/main',
+    'refs/remotes/origin/feature/search',
+  ])
+})
+
+test('remote scope availability is confirmed only by a successful catalog read', () => {
+  assert.equal(remoteScopeUnavailable('refs/remotes/origin/missing', remoteCatalog), true)
+  assert.equal(remoteScopeUnavailable('refs/remotes/upstream/missing', remoteCatalog), false)
+  assert.equal(remoteScopeUnavailable('refs/remotes/origin/missing', [{ ...remoteCatalog[0], loaded: false }]), false)
+  assert.equal(remoteScopeUnavailable('refs/remotes/origin/missing', [{ ...remoteCatalog[0], error: 'read failed' }]), false)
+})
+
+test('remote side branch history relates to the same remote default ref', () => {
+  assert.equal(remoteRelatedScope('refs/remotes/origin/feature/search', remoteCatalog), 'refs/remotes/origin/main')
+  assert.equal(remoteRelatedScope('refs/remotes/origin/main', remoteCatalog), '')
 })

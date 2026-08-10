@@ -261,6 +261,10 @@ func (a *DesktopApp) Refresh() (desktopcore.RepositoryState, error) {
 	return a.service.Current(a.appContext())
 }
 
+func (a *DesktopApp) RemoteBranches(remote string) (desktopcore.RemoteBranchesResponse, error) {
+	return a.service.RemoteBranches(a.appContext(), remote)
+}
+
 func (a *DesktopApp) SyncRemotes() (desktopcore.RemoteSyncResult, error) {
 	return a.service.SyncRemotes(a.appContext())
 }

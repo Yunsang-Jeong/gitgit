@@ -81,6 +81,42 @@ func TestDesktopAppDefersPersistenceUntilStartup(t *testing.T) {
 	}
 }
 
+func TestDesktopAppRemoteBranchesDelegatesToService(t *testing.T) {
+	repository := filepath.Join(t.TempDir(), "repository")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", args...)
+		command.Dir = repository
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	runGit("init", "-q", "-b", "main")
+	runGit("config", "user.name", "GitGit Test")
+	runGit("config", "user.email", "gitgit@example.com")
+	runGit("commit", "-q", "--allow-empty", "-m", "initial")
+	runGit("remote", "add", "origin", filepath.Join(t.TempDir(), "missing-origin.git"))
+	runGit("update-ref", "refs/remotes/origin/main", "HEAD")
+	runGit("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+	service := desktopcore.NewService(nil)
+	t.Cleanup(func() { _ = service.Close() })
+	if _, err := service.Open(context.Background(), repository); err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	app := &DesktopApp{context: context.Background(), service: service}
+	response, err := app.RemoteBranches("origin")
+	if err != nil {
+		t.Fatalf("RemoteBranches(origin): %v", err)
+	}
+	if response.Remote != "origin" || response.DefaultBranch != "main" || response.Count != 1 || len(response.Branches) != 1 || response.Branches[0].Ref != "refs/remotes/origin/main" || !response.Branches[0].Default {
+		t.Fatalf("RemoteBranches(origin) = %#v", response)
+	}
+}
+
 func TestIDECommand(t *testing.T) {
 	tests := []struct {
 		ide         string

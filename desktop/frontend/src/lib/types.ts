@@ -60,6 +60,29 @@ export interface RemoteInfo {
   url: string
 }
 
+export interface RemoteBranchInfo {
+  name: string
+  ref: string
+  default: boolean
+}
+
+export interface RemoteBranchesResponse {
+  remote: string
+  default_branch?: string
+  count: number
+  branches: RemoteBranchInfo[]
+}
+
+export interface RemoteBranchCatalogEntry {
+  remote: RemoteInfo
+  default_branch?: string
+  count: number
+  branches: RemoteBranchInfo[]
+  loading: boolean
+  loaded: boolean
+  error?: string
+}
+
 export interface RemoteSyncResult {
   state: RepositoryState
   warnings?: string[]

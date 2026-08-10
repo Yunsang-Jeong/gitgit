@@ -33,6 +33,7 @@ $ task install
 | [Commit](docs/commit.md) | Commit 화면, history 범위, Preset, Inspector, commit editing |
 | [Worktree](docs/worktree.md) | worktree 모델, 표시 상태, 선택과 제거 규칙 |
 | [Search](docs/search.md) | Search session, AND/OR query, scope, 결과와 비용 모델 |
+| [Remote branches](docs/remote-branches.md) | Local remote-tracking ref를 read-only로 탐색하는 기능과 경계 |
 
 
 ## Develop

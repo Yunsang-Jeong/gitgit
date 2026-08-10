@@ -9,6 +9,8 @@
   import type {
     Pattern,
     RegisteredProject,
+    RemoteBadgeRule,
+    RemoteBranchCatalogEntry,
     RepositoryState,
     SearchProgress,
     SearchResult,
@@ -22,6 +24,8 @@
   export let projects: RegisteredProject[] = []
   export let activeProjectRoot = ''
   export let branches: string[] = []
+  export let remoteBranchCatalog: RemoteBranchCatalogEntry[] = []
+  export let remoteBadgeRules: RemoteBadgeRule[] = []
   export let patterns: Pattern[] = []
   export let engine = 'glob'
   export let scope = 'HEAD'
@@ -50,6 +54,8 @@
   export let onUnregisterProject: (project: RegisteredProject) => void
   export let onWorktreeChange: (worktree: WorktreeInfo) => void
   export let onScopeChange: (scope: string, allRefs: boolean) => void
+  export let onOpenBranches: () => void = () => undefined
+  export let onRetryRemote: (remote: string) => void = () => undefined
   export let onRunSearch: () => void
   export let onCancelSearch: () => void
   export let onSelectResult: (index: number) => void
@@ -148,6 +154,9 @@
         {scope}
         allBranches={allRefs}
         {branches}
+        remoteCatalog={remoteBranchCatalog}
+        remotes={repository?.remotes ?? []}
+        {remoteBadgeRules}
         worktrees={repository?.worktrees ?? []}
         defaultBranch={repository?.default_branch ?? ''}
         currentBranch={repository?.branch ?? ''}
@@ -155,7 +164,11 @@
         currentHead={repository?.head ?? ''}
         activeWorktreeRoot={repository?.root ?? ''}
         disabled={disabled || !repository}
+        allLabel="All refs"
+        allDescription="Every local and fetched remote ref"
         onChange={onScopeChange}
+        onOpen={onOpenBranches}
+        {onRetryRemote}
       />
       <span class="search-session-toolbar-spacer"></span>
       {#if searching}

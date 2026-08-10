@@ -2,11 +2,14 @@
   import BranchScopePicker from './BranchScopePicker.svelte'
   import PresetBar from './PresetBar.svelte'
   import WorktreePicker from './WorktreePicker.svelte'
-  import type { Author, CommitFilterPreset, WorktreeInfo } from '../lib/types'
+  import type { Author, CommitFilterPreset, RemoteBadgeRule, RemoteBranchCatalogEntry, RemoteInfo, WorktreeInfo } from '../lib/types'
 
   export let scope = 'HEAD'
   export let allBranches = false
   export let branches: string[] = []
+  export let remoteBranchCatalog: RemoteBranchCatalogEntry[] = []
+  export let remotes: RemoteInfo[] = []
+  export let remoteBadgeRules: RemoteBadgeRule[] = []
   export let worktrees: WorktreeInfo[] = []
   export let defaultBranch = ''
   export let currentBranch = ''
@@ -24,6 +27,8 @@
   export let editModeActionDisabled = false
   export let worktreeActionsDisabled = false
   export let onScopeChange: (scope: string, allBranches: boolean) => void
+  export let onOpenBranches: () => void = () => undefined
+  export let onRetryRemote: (remote: string) => void = () => undefined
   export let onWorktreeChange: (worktree: WorktreeInfo) => void
   export let onTogglePreset: (id: string) => void
   export let onEnterEditMode: () => void = () => undefined
@@ -43,7 +48,7 @@
 <section class="history-toolbar" aria-label="Commit controls">
   <div class="history-toolbar-main">
     <WorktreePicker {worktrees} activeRoot={activeWorktreeRoot} projectRoot={activeProjectRoot} disabled={disabled || editMode} onChange={onWorktreeChange} />
-    <BranchScopePicker {scope} {allBranches} {branches} {worktrees} {defaultBranch} {currentBranch} {currentDetached} {currentHead} {activeWorktreeRoot} disabled={disabled || editMode} onChange={changeScope} />
+    <BranchScopePicker {scope} {allBranches} {branches} remoteCatalog={remoteBranchCatalog} {remotes} {remoteBadgeRules} {worktrees} {defaultBranch} {currentBranch} {currentDetached} {currentHead} {activeWorktreeRoot} disabled={disabled || editMode} onChange={changeScope} onOpen={onOpenBranches} {onRetryRemote} />
 
     <div class="history-toolbar-quick-actions">
       <PresetBar {presets} activeIDs={activePresetIDs} {author} disabled={disabled || editMode} onToggle={onTogglePreset} />
