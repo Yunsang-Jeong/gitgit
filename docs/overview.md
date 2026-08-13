@@ -7,14 +7,14 @@ audience:
 status: active
 document_type: overview
 scope: project
-last_updated: 2026-08-07
+last_updated: 2026-08-14
 ---
 
 # GitGit Overview
 
 ## 프로젝트 개요
 
-GitGit은 Git repository의 작업 맥락을 읽기 쉽게 만드는 macOS desktop application이다. 여러 project와 linked worktree를 등록하고, worktree가 checkout한 branch와 별도로 history scope를 선택하며, commit과 changed files를 탐색한다.
+GitGit은 Git repository의 작업 맥락을 읽기 쉽게 만드는 macOS desktop application과 read-only VS Code extension이다. Desktop에서는 여러 project와 linked worktree를 등록하고, worktree가 checkout한 branch와 별도로 history scope를 선택하며, commit과 changed files를 탐색한다. VS Code에서는 같은 system Git domain을 사용해 현재 editor의 blame, Search와 commit change range를 확인한다.
 
 핵심 관점은 다음과 같다.
 
@@ -74,15 +74,44 @@ GitGit이 우선하는 방향은 세 가지다.
 
 상세 동작과 상태·오류 경계는 [Remote branches](remote-branches.md)를 따른다.
 
+### Visual Studio Code
+
+- Local VS Code에서 active file의 line blame과 file history를 조회한다.
+- 현재 repository에서 GitGit Search를 실행하고 결과 commit과 file을 editor navigation에 연결한다.
+- 선택한 commit이 현재 file에 만든 target range와 deletion anchor를 editor decoration으로 표시한다.
+- Extension은 target별 bundled helper를 사용하며 Desktop 설치나 실행에 의존하지 않는다.
+- v0.1 VSIX target은 `darwin-arm64`, `darwin-x64`, `win32-x64`로 한정한다.
+
+기능, protocol, 지원 환경과 release invariant는 [Visual Studio Code Extension](vscode.md)을 따른다.
+
 ## Architecture
 
-| Layer | 책임 |
-| --- | --- |
-| `desktop/frontend/` | Svelte UI, 화면 상태, session state, 사용자 interaction |
-| `desktop/` | Wails binding, application lifecycle, native dialog와 shell integration |
-| `internal/desktop/` | Repository state, history/detail/search adapter, cache, project store, guarded mutation |
-| `internal/app/` | Search expression, Git history와 worktree domain logic |
-| `internal/gitexec/` | Argument-safe system Git process execution |
+배포 가능한 두 client는 `apps/` 아래에서 분리하고, 공유 Git domain과 platform adapter는 root Go module의 `internal/`에 둔다.
+
+```text
+apps/
+├── desktop/                 # Wails application과 Svelte frontend
+└── vscode/                  # 독립 VSIX package
+    ├── src/
+    │   ├── extension.ts     # composition root
+    │   ├── editor/          # blame, history, commit highlight
+    │   ├── helper/          # helper client와 protocol parser
+    │   ├── search/          # expression, state, Webview
+    │   └── shared/          # repository identifier와 path 규칙
+    └── tests/               # src feature 경계를 그대로 mirror
+cmd/
+└── gitgit-vscode-helper/    # bundled helper executable entrypoint
+internal/
+├── app/                     # 공유 Search와 worktree domain
+├── gitexec/                 # argument-safe system Git execution
+├── desktop/                 # Desktop-specific adapter와 persistence
+└── vscodehelper/            # read-only JSON-RPC server implementation
+testdata/
+├── search-contract/         # Desktop과 VSIX의 Search contract
+└── vscode-contract/         # Extension과 helper의 protocol contract
+```
+
+`apps/desktop`과 `apps/vscode`는 서로 설치나 실행을 요구하지 않는다. 두 client가 공유하는 것은 `internal/app`, `internal/gitexec`의 Git 동작과 versioned contract이며 UI, process lifecycle, artifact와 update channel은 각각 소유한다.
 
 Backend는 한 시점에 하나의 active repository를 가진다. Frontend에서 project나 worktree를 전환하면 repository generation을 갱신해 오래된 비동기 응답이 새로운 화면 상태를 덮지 못하게 한다.
 
@@ -132,7 +161,7 @@ Repository와 search option을 제어하는 `GITGIT_*` environment variable은 �
 task dev:browser # Wails browser bridge를 localhost:34116에서 실행
 task check       # frontend test/check/build, Go race/vet, native build verification
 task build       # local app compile/sign 검증 후 임시 bundle 제거
-task bundle      # desktop/build/bin/GitGit.app을 명시적으로 보존
+task bundle      # apps/desktop/build/bin/GitGit.app을 명시적으로 보존
 task install     # $HOME/Applications/GitGit.app 교체 후 중간 artifact 제거
 task test:random # deterministic randomized Go suites
 ```
@@ -141,7 +170,9 @@ Product code와 test 변경은 [Development Gate](development.md)의 browser-fir
 
 현재 product version은 `0.2.0`이다. Product version, timestamp build identifier, source revision은 status bar와 bundle metadata에 따로 기록된다.
 
-Release artifact는 현재 build를 실행하는 Mac의 architecture와 macOS 11 이상을 대상으로 하며 local ad-hoc signing을 사용한다. Universal binary, Developer ID signing, notarization과 external distribution은 현재 제공하지 않는다.
+Desktop release artifact는 현재 build를 실행하는 Mac의 architecture와 macOS 11 이상을 대상으로 하며 local ad-hoc signing을 사용한다. Universal binary, Developer ID signing, notarization과 external distribution은 현재 제공하지 않는다.
+
+VS Code extension v0.1은 같은 extension ID와 version으로 `darwin-arm64`, `darwin-x64`, `win32-x64` platform VSIX를 각각 만든다. 각 artifact에는 target과 일치하는 helper 하나만 포함한다. Generic/Web, Linux, Windows ARM64, WSL과 Remote extension host는 v0.1 release 대상이 아니다. 상세 package와 native verification 기준은 [Visual Studio Code Extension](vscode.md)의 release invariant를 따른다.
 
 ## 공통 경계
 
@@ -150,3 +181,4 @@ Release artifact는 현재 build를 실행하는 Mac의 architecture와 macOS 11
 - Worktree 생성·이동과 sparse-checkout mutation은 아직 제공하지 않는다.
 - Search session persistence와 background search queue는 아직 제공하지 않는다.
 - PR/MR/CI provider integration은 아직 제공하지 않는다.
+- VS Code extension과 helper는 read-only이며 repository mutation이나 network operation을 수행하지 않는다.

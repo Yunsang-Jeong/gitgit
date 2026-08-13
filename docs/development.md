@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: gate
 scope: development
-last_updated: 2026-08-07
+last_updated: 2026-08-14
 ---
 
 # Development and Browser Verification
@@ -54,7 +54,7 @@ task build NPM=/opt/homebrew/bin/npm
 
 `task frontend:install`과 `task frontend:build`는 `sources`/`generates` checksum으로 dependency와 Vite input이 바뀐 경우에만 다시 수행한다. `task bundle`은 이 frontend artifact를 준비한 뒤 Wails에는 `-s`로 넘기지만, release metadata와 signing이 현재 실행 시점의 값을 가져야 하므로 항상 새 bundle을 만든다. `-ldflags`는 Go version metadata에만 사용하며 `npm` 탐색이나 `PATH`를 변경하지 않는다.
 
-Taskfile은 의존 task의 중복 실행을 막는 `run: once`, 실행 전 환경을 확인하는 `preconditions`, 성공/실패/중단 후 cleanup을 보장하는 `defer`, 이전 명령 습관을 위한 `aliases`를 사용한다. 일상적인 build, native check, install과 development server는 성공, 실패 또는 중단 시 `desktop/build/bin`을 정리한다. Install 도중 사용하는 hidden staging app도 같은 방식으로 제거한다. 보존 가능한 app bundle 자체가 필요한 경우에만 `task bundle`을 명시적으로 실행한다. 따라서 Spotlight에서 실행 대상으로 선택할 app은 `$HOME/Applications/GitGit.app`이며, repository 내부의 `desktop/build/bin/GitGit.app`은 `task bundle`을 실행한 경우에만 존재한다.
+Taskfile은 의존 task의 중복 실행을 막는 `run: once`, 실행 전 환경을 확인하는 `preconditions`, 성공/실패/중단 후 cleanup을 보장하는 `defer`, 이전 명령 습관을 위한 `aliases`를 사용한다. 일상적인 build, native check, install과 development server는 성공, 실패 또는 중단 시 `apps/desktop/build/bin`을 정리한다. Install 도중 사용하는 hidden staging app도 같은 방식으로 제거한다. 보존 가능한 app bundle 자체가 필요한 경우에만 `task bundle`을 명시적으로 실행한다. 따라서 Spotlight에서 실행 대상으로 선택할 app은 `$HOME/Applications/GitGit.app`이며, repository 내부의 `apps/desktop/build/bin/GitGit.app`은 `task bundle`을 실행한 경우에만 존재한다.
 
 ## Required gate
 

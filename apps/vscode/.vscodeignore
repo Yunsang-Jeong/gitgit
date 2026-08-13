@@ -1,0 +1,8 @@
+**
+!package.json
+!README.md
+!LICENSE
+!media/gitgit.svg
+!dist/extension.js
+!dist/bin/gitgit-vscode-helper
+!dist/bin/gitgit-vscode-helper.exe

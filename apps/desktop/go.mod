@@ -1,4 +1,4 @@
-module github.com/yunsang/gitgit/desktop
+module github.com/yunsang/gitgit/apps/desktop
 
 go 1.26.0
 
@@ -62,4 +62,4 @@ require (
 	google.golang.org/protobuf v1.33.0 // indirect
 )
 
-replace github.com/yunsang/gitgit => ..
+replace github.com/yunsang/gitgit => ../..

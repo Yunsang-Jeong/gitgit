@@ -1,5 +1,10 @@
 /subgit/
 /subgit-worktrees/
-/desktop/build/bin/
+/apps/desktop/build/bin/
+/apps/vscode/node_modules/
+/apps/vscode/dist/
+/apps/vscode/dist-tests/
+/apps/vscode/.vscode-test/
+/dist/vscode/
 /.task/
 .DS_Store

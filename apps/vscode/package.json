@@ -1,0 +1,167 @@
+{
+  "name": "gitgit",
+  "displayName": "GitGit",
+  "description": "Read-only Git investigation for VS Code.",
+  "publisher": "gitgit",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Yunsang-Jeong/gitgit.git"
+  },
+  "homepage": "https://github.com/Yunsang-Jeong/gitgit",
+  "bugs": {
+    "url": "https://github.com/Yunsang-Jeong/gitgit/issues"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "git",
+    "blame",
+    "history",
+    "search"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "workspaceContains:.git",
+    "onView:gitgit.search",
+    "onView:gitgit.investigation"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "GitGit does not start its helper or read repository data until the workspace is trusted."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "GitGit requires a filesystem-backed Git worktree."
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck",
+    "test": "npm run build && node --test dist-tests/tests/**/*.test.js"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitgit.refresh",
+        "title": "Refresh Repository",
+        "category": "GitGit",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitgit.commit.clear",
+        "title": "Clear Commit Highlights",
+        "category": "GitGit"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitgit",
+          "title": "GitGit",
+          "icon": "media/gitgit.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitgit": [
+        {
+          "id": "gitgit.search",
+          "name": "Search",
+          "type": "webview"
+        },
+        {
+          "id": "gitgit.investigation",
+          "name": "Investigation"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "gitgit.refresh",
+          "when": "view == gitgit.investigation",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "GitGit",
+      "properties": {
+        "gitgit.blame.mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off",
+            "activeLine",
+            "visibleLines"
+          ],
+          "enumDescriptions": [
+            "Show the active line unless VS Code native blame or active GitLens may duplicate it.",
+            "Disable GitGit blame decorations.",
+            "Show blame for the active line.",
+            "Show blame for visible editor lines."
+          ],
+          "default": "auto",
+          "scope": "resource",
+          "description": "Controls GitGit line blame decorations."
+        },
+        "gitgit.blame.ignoreWhitespace": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Ignore whitespace changes when calculating GitGit blame."
+        }
+      }
+    },
+    "colors": [
+      {
+        "id": "gitgit.commitChangeBackground",
+        "description": "Background for lines changed by the selected GitGit commit.",
+        "defaults": {
+          "dark": "#2EA04326",
+          "light": "#1A7F3726",
+          "highContrast": "#3FB95040",
+          "highContrastLight": "#1A7F3740"
+        }
+      },
+      {
+        "id": "gitgit.commitChangeOverview",
+        "description": "Overview ruler marker for lines changed by the selected GitGit commit.",
+        "defaults": {
+          "dark": "#3FB950",
+          "light": "#1A7F37",
+          "highContrast": "#3FB950",
+          "highContrastLight": "#1A7F37"
+        }
+      },
+      {
+        "id": "gitgit.commitDeletionForeground",
+        "description": "Marker for deletions made by the selected GitGit commit.",
+        "defaults": {
+          "dark": "#F85149",
+          "light": "#CF222E",
+          "highContrast": "#FF7B72",
+          "highContrastLight": "#CF222E"
+        }
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/vscode": "1.96.0",
+    "@vscode/vsce": "3.7.1",
+    "esbuild": "0.27.0",
+    "typescript": "5.9.3"
+  }
+}

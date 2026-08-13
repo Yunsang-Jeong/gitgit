@@ -5,6 +5,7 @@
 - **Commit**: worktree, branch를 선택하고 commit을 열람하며, 제한된 local history의 순서와 metadata를 수정할 수 있다. Changed files와 diff는 현재 read-only다.
 - **Worktree**: 연결된 worktree의 branch, path, dirty/locked/sparse/merge 상태를 비교하고 정리한다.
 - **Search**: 정밀한 blame을 위해 조금은 변태같이 commit을 뒤적거린다.
+- **VS Code**: bundled read-only helper로 line blame, Search와 commit change highlight를 editor 안에서 제공한다.
 
 ## QuickStart
 
@@ -34,6 +35,7 @@ $ task install
 | [Worktree](docs/worktree.md) | worktree 모델, 표시 상태, 선택과 제거 규칙 |
 | [Search](docs/search.md) | Search session, AND/OR query, scope, 결과와 비용 모델 |
 | [Remote branches](docs/remote-branches.md) | Local remote-tracking ref를 read-only로 탐색하는 기능과 경계 |
+| [Visual Studio Code](docs/vscode.md) | VS Code extension v0.1 기능, helper protocol, 지원 target과 배포 경계 |
 
 
 ## Develop
@@ -64,4 +66,4 @@ Product code나 test를 변경할 때는 Wails browser bridge에서 대상 flow�
 
 Taskfile의 task는 macOS에서만 실행된다. Build는 현재 Mac의 architecture를 따르며, GUI 환경에서 npm 경로를 찾지 못하면 `task build NPM=/absolute/path/to/npm`처럼 지정할 수 있다.
 
-Taskfile은 frontend dependency와 build input에는 Task의 `sources`/`generates` checksum cache를 사용하지만, release metadata와 signing이 필요한 `task bundle`은 매번 새로 수행한다. `task build`, `task check`, `task install`, `task dev:browser`는 종료할 때 `desktop/build/bin`의 임시 app bundle을 정리한다. 실제 local bundle을 보존해야 할 때만 `task bundle`을 사용하며, 결과는 `desktop/build/bin/GitGit.app`에 남는다.
+Taskfile은 frontend dependency와 build input에는 Task의 `sources`/`generates` checksum cache를 사용하지만, release metadata와 signing이 필요한 `task bundle`은 매번 새로 수행한다. `task build`, `task check`, `task install`, `task dev:browser`는 종료할 때 `apps/desktop/build/bin`의 임시 app bundle을 정리한다. 실제 local bundle을 보존해야 할 때만 `task bundle`을 사용하며, 결과는 `apps/desktop/build/bin/GitGit.app`에 남는다.

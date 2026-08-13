@@ -1,0 +1,56 @@
+{
+  "protocolVersion": 1,
+  "transport": "ndjson-jsonrpc-2.0-stdio",
+  "lineBase": 1,
+  "readOnly": true,
+  "network": false,
+  "maxOutputBytes": 8388608,
+  "methods": [
+    "initialize",
+    "repository.discover",
+    "refs.list",
+    "blame.lines",
+    "history.file",
+    "search.run",
+    "revision.content",
+    "diff.file"
+  ],
+  "notifications": [
+    "$/cancelRequest",
+    "$/progress"
+  ],
+  "pathRules": {
+    "repository": "absolute-existing-worktree",
+    "file": "repository-relative-no-escape"
+  },
+  "methodContracts": {
+    "repository.discover": {
+      "requiredParams": ["path"],
+      "requiredResult": ["root", "commonDir", "gitDir", "branch", "head"]
+    },
+    "blame.lines": {
+      "requiredParams": ["repositoryRoot", "relativePath", "startLine", "endLine"],
+      "optionalParams": ["revision", "contents", "ignoreWhitespace"],
+      "requiredResult": ["lines"]
+    },
+    "history.file": {
+      "requiredParams": ["repositoryRoot", "relativePath"],
+      "optionalParams": ["revision", "limit"],
+      "requiredResult": ["commits"]
+    },
+    "search.run": {
+      "requiredParams": ["repositoryRoot", "patterns"],
+      "optionalParams": ["engine", "scope", "allRefs", "author", "since", "until", "followRename", "limit", "context"],
+      "requiredResult": ["scope", "allRefs", "scanned", "count", "results"]
+    },
+    "revision.content": {
+      "requiredParams": ["repositoryRoot", "revision", "relativePath"],
+      "requiredResult": ["content"]
+    },
+    "diff.file": {
+      "requiredParams": ["repositoryRoot", "commit", "path"],
+      "optionalParams": ["oldPath", "context"],
+      "requiredResult": ["parent", "diff", "targetRanges", "deletionAnchors"]
+    }
+  }
+}

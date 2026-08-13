@@ -2,7 +2,7 @@ version: '3.50.0'
 
 # The public tasks below keep the release pipeline explicit. `deps` are used
 # only for independent guards; stateful release and verification steps call
-# child tasks serially so they never race over desktop/build/bin.
+# child tasks serially so they never race over apps/desktop/build/bin.
 
 set:
   - errexit
@@ -39,10 +39,12 @@ vars:
   SUBGIT_DIR:
     sh: 'printf "%s" "${SUBGIT_DIR:-{{.ROOT_DIR}}/subgit}"'
   SUBGIT_SETUP: '{{.ROOT_DIR}}/testdata/subgit/setup.sh'
-  DESKTOP_DIR: '{{.ROOT_DIR}}/desktop'
-  FRONTEND_DIR: '{{.ROOT_DIR}}/desktop/frontend'
-  BUILD_BIN_DIR: '{{.ROOT_DIR}}/desktop/build/bin'
-  APP_BUNDLE: '{{.ROOT_DIR}}/desktop/build/bin/{{.APP_NAME}}.app'
+  DESKTOP_DIR: '{{.ROOT_DIR}}/apps/desktop'
+  FRONTEND_DIR: '{{.ROOT_DIR}}/apps/desktop/frontend'
+  VSCODE_DIR: '{{.ROOT_DIR}}/apps/vscode'
+  VSCODE_PACKAGE_SCRIPT: '{{.ROOT_DIR}}/scripts/package-vscode.sh'
+  BUILD_BIN_DIR: '{{.ROOT_DIR}}/apps/desktop/build/bin'
+  APP_BUNDLE: '{{.ROOT_DIR}}/apps/desktop/build/bin/{{.APP_NAME}}.app'
   INSTALLED_APP: '{{.INSTALL_DIR}}/{{.APP_NAME}}.app'
   INSTALL_STAGING_APP: '{{.INSTALL_DIR}}/.{{.APP_NAME}}.app.installing'
   CACHE_DIR:
@@ -64,7 +66,7 @@ tasks:
       - task: bundle
 
   bundle:
-    desc: Build and retain desktop/build/bin/GitGit.app for local inspection.
+    desc: Build and retain apps/desktop/build/bin/GitGit.app for local inspection.
     cmds:
       - defer: |
           {{if .EXIT_CODE}}
@@ -166,6 +168,38 @@ tasks:
       - 'vtool -show-build "{{.APP_BUNDLE}}/Contents/MacOS/{{.APP_NAME}}" | grep -q "minos {{.MACOS_MINIMUM_VERSION}}"'
       - 'codesign --verify --deep --strict --verbose=2 "{{.APP_BUNDLE}}"'
 
+  vscode:check:
+    desc: Run the protocol, Go helper, and VS Code extension checks.
+    aliases: [vscode-check]
+    deps: [toolchain:vscode]
+    env:
+      GO: '{{.GO}}'
+      NPM: '{{.NPM_BIN}}'
+    cmds:
+      - '"{{.VSCODE_PACKAGE_SCRIPT}}" --check-only'
+
+  vscode:package:
+    desc: Build and audit darwin-arm64, darwin-x64, and win32-x64 VSIX artifacts.
+    aliases: [vscode-package]
+    deps: [toolchain:vscode]
+    env:
+      GO: '{{.GO}}'
+      NPM: '{{.NPM_BIN}}'
+    cmds:
+      - '"{{.VSCODE_PACKAGE_SCRIPT}}"'
+
+  vscode:package:target:
+    desc: Build and audit one VSIX with TARGET=darwin-arm64, darwin-x64, or win32-x64.
+    deps: [toolchain:vscode]
+    preconditions:
+      - sh: 'case "{{.TARGET}}" in darwin-arm64|darwin-x64|win32-x64) exit 0 ;; *) exit 1 ;; esac'
+        msg: 'vscode:package:target requires TARGET=darwin-arm64, darwin-x64, or win32-x64.'
+    env:
+      GO: '{{.GO}}'
+      NPM: '{{.NPM_BIN}}'
+    cmds:
+      - '"{{.VSCODE_PACKAGE_SCRIPT}}" --target "{{.TARGET}}"'
+
   fixture:create:
     desc: Create the managed subgit fixture repository.
     aliases: [subgit]
@@ -187,7 +221,7 @@ tasks:
     deps: [toolchain:npm]
     run: once
     sources:
-      - ../../Taskfile.yml
+      - ../../../Taskfile.yml
       - package.json
       - package-lock.json
     generates:
@@ -204,7 +238,7 @@ tasks:
     dir: '{{.FRONTEND_DIR}}'
     deps: [frontend:install]
     sources:
-      - ../../Taskfile.yml
+      - ../../../Taskfile.yml
       - package.json
       - package-lock.json
       - index.html
@@ -343,6 +377,24 @@ tasks:
     preconditions:
       - sh: 'command -v ditto >/dev/null 2>&1'
         msg: 'install requires the macOS ditto command.'
+
+  toolchain:vscode:
+    internal: true
+    preconditions:
+      - sh: 'command -v bash >/dev/null 2>&1'
+        msg: 'VS Code packaging requires bash.'
+      - sh: 'command -v "{{.GO}}" >/dev/null 2>&1'
+        msg: 'Go was not found. Set GO=/absolute/path/to/go or add go to PATH.'
+      - sh: 'test -n "{{.NPM_BIN}}" && test -x "{{.NPM_BIN}}"'
+        msg: 'npm was not found. Set NPM=/absolute/path/to/npm or add npm to PATH.'
+      - sh: 'command -v node >/dev/null 2>&1'
+        msg: 'VS Code packaging requires Node.js.'
+      - sh: 'command -v unzip >/dev/null 2>&1'
+        msg: 'VS Code packaging requires unzip.'
+      - sh: 'test -x "{{.VSCODE_PACKAGE_SCRIPT}}"'
+        msg: 'VS Code packaging script is missing or not executable.'
+      - sh: 'test -f "{{.VSCODE_DIR}}/package.json" && test -f "{{.VSCODE_DIR}}/package-lock.json"'
+        msg: 'VS Code extension package files are missing.'
 
   guard:uninstall-paths:
     internal: true

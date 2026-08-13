@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import {
@@ -11,6 +12,27 @@ import {
   searchPatternText,
   ungroupSearchPatternRange,
 } from '../src/lib/search-expression.ts'
+
+const contractCases = JSON.parse(await readFile(
+  new URL('../../../../testdata/search-contract/expression-cases.json', import.meta.url),
+  'utf8',
+))
+
+test('expression parser satisfies the shared Desktop and VSIX contract', async (t) => {
+  for (const contractCase of contractCases) {
+    await t.test(contractCase.name, () => {
+      const parsed = parseSearchExpression(contractCase.expression)
+      if (contractCase.errorIncludes) {
+        assert.match(parsed.error, new RegExp(contractCase.errorIncludes.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')))
+        return
+      }
+      assert.deepEqual(parsed, {
+        patterns: contractCase.patterns,
+        error: contractCase.error,
+      })
+    })
+  }
+})
 
 test('expression input parses sources, operators, and nested groups', () => {
   assert.deepEqual(parseSearchExpression('MSG: *cache* OR (FILE: **/*.go AND DIFF: *context*)'), {

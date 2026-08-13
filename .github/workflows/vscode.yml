@@ -1,0 +1,217 @@
+name: VS Code Extension
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vscode-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Test, package, and audit platform VSIXs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: apps/vscode/package-lock.json
+
+      - name: Test Go core/helper and check extension
+        shell: bash
+        run: ./scripts/package-vscode.sh --check-only
+
+      - name: Cross-build helpers, package VSIXs, and audit contents
+        shell: bash
+        run: ./scripts/package-vscode.sh --skip-checks
+
+      - name: Upload audited VSIX artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitgit-vscode-v0.1
+          path: |
+            dist/vscode/*.vsix
+            dist/vscode/release-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-native:
+    name: Test packaged helper on Windows x64
+    needs: package
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run VS Code helper real-repository tests on Windows
+        shell: pwsh
+        run: go test ./internal/vscodehelper
+
+      - name: Download audited VSIX artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: gitgit-vscode-v0.1
+          path: ${{ runner.temp }}/gitgit-vscode
+
+      - name: Run packaged win32-x64 helper natively
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $artifactDirectory = Join-Path $env:RUNNER_TEMP 'gitgit-vscode'
+          $manifestPath = Join-Path $artifactDirectory 'release-manifest.json'
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            throw "Release manifest was not found at $manifestPath."
+          }
+          $releaseManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $win32Artifacts = @($releaseManifest.artifacts | Where-Object { $_.target -eq 'win32-x64' })
+          if ($win32Artifacts.Count -ne 1) {
+            throw "Expected one win32-x64 entry in the release manifest, found $($win32Artifacts.Count)."
+          }
+          $artifact = Join-Path $artifactDirectory $win32Artifacts[0].file
+          if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+            throw "Manifest VSIX was not found at $artifact."
+          }
+          $actualHash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $win32Artifacts[0].sha256) {
+            throw 'Packaged win32-x64 VSIX does not match the release manifest SHA-256.'
+          }
+
+          $extractDirectory = Join-Path $env:RUNNER_TEMP 'gitgit-win32-x64-smoke'
+          if (Test-Path -LiteralPath $extractDirectory) {
+            Remove-Item -LiteralPath $extractDirectory -Recurse -Force
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($artifact, $extractDirectory)
+
+          $helper = Join-Path $extractDirectory 'extension\dist\bin\gitgit-vscode-helper.exe'
+          if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+            throw "Packaged win32-x64 helper was not found at $helper."
+          }
+
+          $repositoryPath = (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE).Path
+          $beforeStatus = @(git -C $repositoryPath status --porcelain=v1 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to capture repository status before the helper smoke test.'
+          }
+
+          $initializeRequest = (@{
+            jsonrpc = '2.0'
+            id = 1
+            method = 'initialize'
+            params = @{ protocolVersion = 1 }
+          } | ConvertTo-Json -Compress -Depth 5)
+          $discoverRequest = (@{
+            jsonrpc = '2.0'
+            id = 2
+            method = 'repository.discover'
+            params = @{ path = $repositoryPath }
+          } | ConvertTo-Json -Compress -Depth 5)
+
+          $requestPath = Join-Path $env:RUNNER_TEMP 'gitgit-helper-requests.ndjson'
+          $responsePath = Join-Path $env:RUNNER_TEMP 'gitgit-helper-responses.ndjson'
+          $errorPath = Join-Path $env:RUNNER_TEMP 'gitgit-helper-stderr.txt'
+          [string[]]$requestLines = @($initializeRequest, $discoverRequest)
+          [System.IO.File]::WriteAllLines(
+            $requestPath,
+            $requestLines,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+          $process = Start-Process `
+            -FilePath $helper `
+            -RedirectStandardInput $requestPath `
+            -RedirectStandardOutput $responsePath `
+            -RedirectStandardError $errorPath `
+            -NoNewWindow `
+            -Wait `
+            -PassThru
+          if ($process.ExitCode -ne 0) {
+            $stderr = Get-Content -LiteralPath $errorPath -Raw
+            throw "Packaged helper exited with $($process.ExitCode): $stderr"
+          }
+
+          $responses = @(
+            Get-Content -LiteralPath $responsePath |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+              ForEach-Object { $_ | ConvertFrom-Json }
+          )
+          if ($responses.Count -ne 2) {
+            throw "Expected two JSON-RPC responses, found $($responses.Count)."
+          }
+
+          $initialize = @($responses | Where-Object { $_.id -eq 1 })
+          $discover = @($responses | Where-Object { $_.id -eq 2 })
+          if ($initialize.Count -ne 1 -or $discover.Count -ne 1) {
+            throw 'Packaged helper did not preserve the initialize and repository.discover request IDs.'
+          }
+          $initialize = $initialize[0]
+          $discover = $discover[0]
+          if ($null -ne $initialize.error -or $null -ne $discover.error) {
+            throw 'Packaged helper returned a JSON-RPC error during the native smoke test.'
+          }
+
+          if ($releaseManifest.protocolVersion -ne 1 -or
+              $initialize.result.protocolVersion -ne $releaseManifest.protocolVersion -or
+              $initialize.result.transport -ne 'ndjson-jsonrpc-2.0-stdio' -or
+              $initialize.result.readOnly -ne $true -or
+              $initialize.result.network -ne $false -or
+              $initialize.result.capabilities.readOnly -ne $true -or
+              $initialize.result.capabilities.network -ne $false) {
+            throw 'Packaged helper initialize response violates the v0.1 read-only/offline contract.'
+          }
+          if (@($initialize.result.methods) -notcontains 'initialize' -or
+              @($initialize.result.methods) -notcontains 'repository.discover') {
+            throw 'Packaged helper initialize response is missing required methods.'
+          }
+          if ($initialize.result.server.name -ne 'gitgit-vscode-helper' -or
+              $initialize.result.server.version -ne $releaseManifest.helperServerVersion -or
+              $initialize.result.diagnostics.gitAvailable -ne $true) {
+            throw 'Packaged helper server metadata or system Git diagnostics do not match the release manifest.'
+          }
+
+          if ([string]::IsNullOrWhiteSpace($discover.result.root) -or
+              [string]::IsNullOrWhiteSpace($discover.result.commonDir) -or
+              [string]::IsNullOrWhiteSpace($discover.result.gitDir) -or
+              $discover.result.head -notmatch '^[0-9a-f]{40,64}$' -or
+              -not (Test-Path -LiteralPath $discover.result.root -PathType Container)) {
+            throw 'Packaged helper returned an invalid repository.discover result on Windows.'
+          }
+
+          $afterStatus = @(git -C $repositoryPath status --porcelain=v1 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to capture repository status after the helper smoke test.'
+          }
+          if (($beforeStatus -join "`n") -ne ($afterStatus -join "`n")) {
+            throw 'Packaged helper changed the checkout during a read-only smoke test.'
+          }
+
+          Write-Host 'Packaged win32-x64 helper passed native initialize, discovery, and read-only checks.'

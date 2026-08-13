@@ -7,11 +7,11 @@ test('changed files form a directory-first tree without losing file metadata', (
     { status: 'M', path: 'README.md' },
     { status: 'A', path: 'internal/git/history.go' },
     { status: 'R', old_path: 'internal/git/old.go', path: 'internal/git/new.go' },
-    { status: 'M', path: 'desktop/app.go' },
+    { status: 'M', path: 'apps/desktop/app.go' },
   ])
 
   assert.deepEqual(tree.map((node) => [node.kind, node.name]), [
-    ['directory', 'desktop'],
+    ['directory', 'apps'],
     ['directory', 'internal'],
     ['file', 'README.md'],
   ])
@@ -47,23 +47,24 @@ test('empty and metadata-only diffs do not produce preview lines', () => {
 
 test('repository tree metadata highlights changed paths and expands ancestors only', () => {
   const files = [
-    { status: 'M', path: 'desktop/frontend/src/App.svelte' },
+    { status: 'M', path: 'apps/desktop/frontend/src/App.svelte' },
     { status: 'R', old_path: 'internal/git/old.go', path: 'internal/git/new.go' },
     { status: 'A', path: 'README.md' },
   ]
 
   assert.deepEqual(changedFileStatusMap(files), {
-    'desktop/frontend/src/App.svelte': 'M',
+    'apps/desktop/frontend/src/App.svelte': 'M',
     'internal/git/new.go': 'R',
     'internal/git/old.go': 'R',
     'README.md': 'A',
   })
   assert.deepEqual([...changedDirectoryPaths(files)].sort(), [
-    'desktop',
-    'desktop/frontend',
-    'desktop/frontend/src',
+    'apps',
+    'apps/desktop',
+    'apps/desktop/frontend',
+    'apps/desktop/frontend/src',
     'internal',
     'internal/git',
   ])
-  assert.equal(changedFilesSignature(files), 'A:README.md|M:desktop/frontend/src/App.svelte|R:internal/git/new.go|R:internal/git/old.go')
+  assert.equal(changedFilesSignature(files), 'A:README.md|M:apps/desktop/frontend/src/App.svelte|R:internal/git/new.go|R:internal/git/old.go')
 })

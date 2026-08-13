@@ -1,0 +1,65 @@
+[
+  {
+    "name": "sources operators and nested groups",
+    "expression": "MSG: *cache* OR (FILE: **/*.go AND DIFF: *context*)",
+    "patterns": [
+      { "source": "msg", "value": "*cache*" },
+      { "source": "file", "value": "**/*.go", "join": "or", "open_groups": 1 },
+      { "source": "diff", "value": "*context*", "join": "and", "close_groups": 1 }
+    ],
+    "error": ""
+  },
+  {
+    "name": "message alias and quoted operator",
+    "expression": "MESSAGE: \"fix AND ship\" OR DIFF: ^(fix|feat)",
+    "patterns": [
+      { "source": "msg", "value": "fix AND ship" },
+      { "source": "diff", "value": "^(fix|feat)", "join": "or" }
+    ],
+    "error": ""
+  },
+  {
+    "name": "single quoted value",
+    "expression": "FILE: '**/release notes/*.md'",
+    "patterns": [
+      { "source": "file", "value": "**/release notes/*.md" }
+    ],
+    "error": ""
+  },
+  {
+    "name": "empty expression",
+    "expression": "   ",
+    "patterns": [],
+    "error": ""
+  },
+  {
+    "name": "missing source colon",
+    "expression": "MSG",
+    "errorIncludes": "Add : after MSG"
+  },
+  {
+    "name": "missing pattern value",
+    "expression": "DIFF:",
+    "errorIncludes": "Enter a pattern after DIFF"
+  },
+  {
+    "name": "dangling operator",
+    "expression": "MSG: *cache* AND",
+    "errorIncludes": "after AND"
+  },
+  {
+    "name": "unknown source",
+    "expression": "MSG: *cache* AND TAG: team",
+    "errorIncludes": "TAG: is not a source"
+  },
+  {
+    "name": "unbalanced group",
+    "expression": "(MSG: *cache*",
+    "errorIncludes": "parenthesis is missing"
+  },
+  {
+    "name": "unclosed quote",
+    "expression": "MSG: \"cache",
+    "errorIncludes": "Close the \" quoted pattern"
+  }
+]
