@@ -62,6 +62,21 @@ func TestRunnerAndRepositoryLifecycle(t *testing.T) {
 	}
 }
 
+func TestRunnerOutputLimitStopsOversizedStdout(t *testing.T) {
+	runner := NewRunner()
+	ctx := context.Background()
+	if _, err := runner.RunWithEnvLimit(ctx, "", nil, nil, 4, "--version"); !errors.Is(err, ErrOutputLimit) {
+		t.Fatalf("limited Git output error = %v, want ErrOutputLimit", err)
+	}
+	output, err := runner.RunWithEnvLimit(ctx, "", nil, nil, 1024, "--version")
+	if err != nil {
+		t.Fatalf("bounded Git version: %v", err)
+	}
+	if !strings.HasPrefix(string(output), "git version ") {
+		t.Fatalf("Git version output = %q", output)
+	}
+}
+
 func TestRunnerIgnoresAmbientRepositorySelectionEnvironment(t *testing.T) {
 	ctx := context.Background()
 	realGit, err := exec.LookPath("git")

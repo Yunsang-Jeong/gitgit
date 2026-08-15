@@ -160,7 +160,12 @@ export interface SearchResult {
   files: FileChange[]
   diff: string
   match_sources: PatternSource[]
-  matched_files?: FileChange[]
+  matched_files: SearchFileMatch[]
+  changed_files: FileChange[]
+}
+
+export interface SearchFileMatch extends FileChange {
+  match_sources: Array<'diff' | 'file'>
 }
 
 export type SearchSessionStatus = 'running' | 'ready' | 'stale' | 'error'
@@ -172,6 +177,7 @@ export interface SearchSessionSummary {
   query: string
   status?: SearchSessionStatus
   result_count: number
+  has_more: boolean
   last_searched_at?: string
 }
 
@@ -180,6 +186,7 @@ export interface SearchResponse {
   all_refs: boolean
   scanned: number
   count: number
+  has_more: boolean
   results: SearchResult[]
 }
 

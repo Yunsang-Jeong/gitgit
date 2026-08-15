@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatSearchCommitCount } from '../lib/search-results'
   import type { NavigatorView } from '../lib/types'
 
   export let repositoryOpen = false
@@ -7,6 +8,7 @@
   export let scope = 'HEAD'
   export let scanned = 0
   export let count = 0
+  export let hasMore = false
   export let loaded = 0
   export let message = ''
   export let kind: 'info' | 'success' | 'warning' | 'error' = 'info'
@@ -26,7 +28,7 @@
         <span>·</span>
         <span>{scanned.toLocaleString()} commits scanned</span>
         <span>·</span>
-        <span>{count.toLocaleString()} matching commits</span>
+        <span>{formatSearchCommitCount(count, hasMore)} matching commits</span>
       {:else}
         <strong>{scope || 'HEAD'}</strong>
         <span>·</span>

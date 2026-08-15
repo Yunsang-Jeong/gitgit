@@ -86,6 +86,9 @@ func TestServiceOpensRepositoryAndEnrichesSearchResults(t *testing.T) {
 	if response.Scanned != 2 || response.Count != 2 {
 		t.Fatalf("unexpected response counts: %#v", response)
 	}
+	if response.HasMore {
+		t.Fatalf("complete response unexpectedly reports more results: %#v", response)
+	}
 	if response.Results[0].Message != "fix: update search implementation" {
 		t.Fatalf("unexpected message: %q", response.Results[0].Message)
 	}
@@ -94,6 +97,26 @@ func TestServiceOpensRepositoryAndEnrichesSearchResults(t *testing.T) {
 	}
 	if len(response.Results[0].Files) != 1 || response.Results[0].Files[0].Path != "internal/search.go" {
 		t.Fatalf("unexpected changed files: %#v", response.Results[0].Files)
+	}
+	if !reflect.DeepEqual(response.Results[0].ChangedFiles, response.Results[0].Files) {
+		t.Fatalf("canonical changed files = %#v, want %#v", response.Results[0].ChangedFiles, response.Results[0].Files)
+	}
+	if len(response.Results[0].MatchedFiles) != 1 || !reflect.DeepEqual(response.Results[0].MatchedFiles[0].MatchSources, []string{"file"}) {
+		t.Fatalf("canonical matched files lost per-file sources: %#v", response.Results[0].MatchedFiles)
+	}
+
+	truncated, err := service.Search(context.Background(), SearchRequest{
+		Patterns: []Pattern{{Source: "file", Value: "**/*.go"}},
+		Engine:   "glob",
+		Scope:    "HEAD",
+		Limit:    1,
+		Context:  3,
+	})
+	if err != nil {
+		t.Fatalf("search limited repository: %v", err)
+	}
+	if truncated.Count != 1 || !truncated.HasMore {
+		t.Fatalf("limited response count/has_more = %d/%t, want 1/true", truncated.Count, truncated.HasMore)
 	}
 }
 
@@ -1274,7 +1297,24 @@ func TestServiceCanonicalSubgitSearchScenarios(t *testing.T) {
 			name:        "file double-star glob",
 			request:     scenarioSearch("FILE", "**/*.md", "glob", "HEAD"),
 			wantScanned: 100,
-			wantCount:   4,
+			wantCount:   3,
+			check: func(t *testing.T, response SearchResponse) {
+				matched := 0
+				for _, result := range response.Results {
+					matched += len(result.MatchedFiles)
+					if !reflect.DeepEqual(result.ChangedFiles, result.Files) {
+						t.Fatalf("canonical changed files = %#v, want %#v", result.ChangedFiles, result.Files)
+					}
+					for _, file := range result.MatchedFiles {
+						if !reflect.DeepEqual(file.MatchSources, []string{"file"}) {
+							t.Fatalf("matched file sources = %v, want [file]", file.MatchSources)
+						}
+					}
+				}
+				if matched != 4 {
+					t.Fatalf("matched Markdown files = %d, want 4", matched)
+				}
+			},
 		},
 		{
 			name:        "message regex",

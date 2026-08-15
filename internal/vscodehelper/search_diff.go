@@ -239,24 +239,26 @@ func (s *Server) searchRun(
 
 	results := make([]SearchResult, 0, len(searchResponse.Results))
 	for _, match := range searchResponse.Results {
-		files := make([]FileChange, 0, len(match.Files))
-		for _, file := range match.Files {
-			files = append(files, FileChange{Status: file.Status, OldPath: file.OldPath, Path: file.Path})
+		changedFiles := make([]FileChange, 0, len(match.ChangedFiles))
+		for _, file := range match.ChangedFiles {
+			changedFiles = append(changedFiles, FileChange{Status: file.Status, OldPath: file.OldPath, Path: file.Path})
+		}
+		matchedFiles := make([]SearchMatchedFile, 0, len(match.MatchedFiles))
+		for _, file := range match.MatchedFiles {
+			matchedFiles = append(matchedFiles, SearchMatchedFile{
+				Status: file.Status, OldPath: file.OldPath, Path: file.Path,
+				MatchSources: append([]string(nil), file.MatchSources...),
+			})
 		}
 		results = append(results, SearchResult{
-			Author:      Author{Name: match.Author.Name, Email: match.Author.Email},
-			Commit:      match.Commit,
-			ShortCommit: shortObjectID(match.Commit),
-			Message:     match.Message,
-			Date:        match.Date,
-			Refs:        append([]string(nil), match.Refs...),
-			File: FileChange{
-				Status:  match.File.Status,
-				OldPath: match.File.OldPath,
-				Path:    match.File.Path,
-			},
-			Files:        files,
-			Diff:         match.Diff,
+			Author:       Author{Name: match.Author.Name, Email: match.Author.Email},
+			Commit:       match.Commit,
+			ShortCommit:  shortObjectID(match.Commit),
+			Message:      match.Message,
+			Date:         match.Date,
+			Refs:         append([]string(nil), match.Refs...),
+			MatchedFiles: matchedFiles,
+			ChangedFiles: changedFiles,
 			MatchSources: append([]string(nil), match.MatchSources...),
 		})
 	}
@@ -265,6 +267,7 @@ func (s *Server) searchRun(
 		AllRefs: allRefs,
 		Scanned: searchResponse.Scanned,
 		Count:   len(results),
+		HasMore: searchResponse.HasMore,
 		Results: results,
 	}, nil
 }
@@ -328,25 +331,37 @@ func (s *Server) diffFile(ctx context.Context, rawParams json.RawMessage) (DiffF
 
 	paths := make([]string, 0, 2)
 	if change.OldPath != "" {
-		paths = append(paths, change.OldPath)
+		paths = append(paths, literalPathspec(change.OldPath))
 	}
-	paths = append(paths, change.Path)
+	paths = append(paths, literalPathspec(change.Path))
 	args := []string{
-		"show",
-		"--format=",
-		"--root",
-		"--first-parent",
+		"diff-tree",
+		"--no-commit-id",
+		"--raw",
+		"-z",
+		"-p",
 		"--no-ext-diff",
+		"--no-textconv",
 		"--no-color",
-		"--find-renames",
+		"-M",
+		"-r",
+		"--diff-filter=" + change.Status[:1],
 		fmt.Sprintf("--unified=%d", contextLines),
-		commit,
-		"--",
 	}
+	if parent == "" {
+		args = append(args, "--root", commit)
+	} else {
+		args = append(args, parent, commit)
+	}
+	args = append(args, "--")
 	args = append(args, paths...)
 	output, err := runReadOnlyGit(ctx, repository, nil, args...)
 	if err != nil {
 		return DiffFileResult{}, gitCommandError(ctx, err)
+	}
+	output, parseError := selectExactFileDiff(output, change)
+	if parseError != nil {
+		return DiffFileResult{}, rpcError(codeInternalError, "invalid_git_output", parseError.Error())
 	}
 	if len(output) > maxTextBytes {
 		return DiffFileResult{}, rpcError(codeInternalError, "output_too_large", "file diff exceeds the helper text size limit")
@@ -370,7 +385,7 @@ func (s *Server) diffFile(ctx context.Context, rawParams json.RawMessage) (DiffF
 	targetLineCount := 0
 	if targetContent, targetError := readRevisionBlob(ctx, repository, commit, change.Path); targetError == nil {
 		targetLineCount = textLineCount(targetContent)
-	} else if targetError.Data.Code != "revision_content_not_found" {
+	} else if targetError.Data.Code != "revision_content_not_found" && targetError.Data.Code != "revision_content_not_file" {
 		return DiffFileResult{}, targetError
 	}
 	targetRanges, deletionAnchors, err := parseUnifiedRanges(diff, targetLineCount)
@@ -383,6 +398,115 @@ func (s *Server) diffFile(ctx context.Context, rawParams json.RawMessage) (DiffF
 		TargetRanges:    targetRanges,
 		DeletionAnchors: deletionAnchors,
 	}, nil
+}
+
+func selectExactFileDiff(output []byte, selected FileChange) ([]byte, error) {
+	separator := bytes.Index(output, []byte{0, 0})
+	if separator < 0 {
+		if len(bytes.TrimSpace(output)) == 0 {
+			return nil, nil
+		}
+		return nil, errors.New("Git returned a diff without a raw/patch boundary")
+	}
+	raw := output[:separator+1]
+	patches := output[separator+2:]
+	changes, err := parseRawFileChanges(raw)
+	if err != nil {
+		return nil, err
+	}
+	patchStarts := patchHeaderStarts(patches)
+	expectedPatchCount := 0
+	for _, change := range changes {
+		expectedPatchCount += change.patchCount
+	}
+	if expectedPatchCount != len(patchStarts) {
+		return nil, fmt.Errorf(
+			"Git returned %d raw changes requiring %d file patches and emitted %d",
+			len(changes),
+			expectedPatchCount,
+			len(patchStarts),
+		)
+	}
+	patchIndex := 0
+	for _, parsed := range changes {
+		nextPatchIndex := patchIndex + parsed.patchCount
+		change := parsed.change
+		if change.Status != selected.Status || change.Path != selected.Path || change.OldPath != selected.OldPath {
+			patchIndex = nextPatchIndex
+			continue
+		}
+		end := len(patches)
+		if nextPatchIndex < len(patchStarts) {
+			end = patchStarts[nextPatchIndex]
+		}
+		return bytes.TrimRight(patches[patchStarts[patchIndex]:end], "\n"), nil
+	}
+	return nil, nil
+}
+
+type rawFileChange struct {
+	change     FileChange
+	patchCount int
+}
+
+func parseRawFileChanges(raw []byte) ([]rawFileChange, error) {
+	tokens := bytes.Split(raw, []byte{0})
+	changes := make([]rawFileChange, 0, len(tokens)/2)
+	for index := 0; index < len(tokens); {
+		if len(tokens[index]) == 0 {
+			index++
+			continue
+		}
+		fields := bytes.Fields(tokens[index])
+		index++
+		if len(fields) != 5 || len(fields[4]) == 0 || fields[0][0] != ':' || !validFileStatus(string(fields[4])) {
+			return nil, errors.New("Git returned an invalid raw diff record")
+		}
+		status := string(fields[4])
+		patchCount := 1
+		if status[0] == 'T' && (string(fields[0][1:]) == "160000" || string(fields[1]) == "160000") {
+			// Git represents a blob/gitlink type change as one raw record but
+			// emits separate deletion and addition patch sections.
+			patchCount = 2
+		}
+		if index >= len(tokens) {
+			return nil, errors.New("Git raw diff path is missing")
+		}
+		if status[0] == 'R' || status[0] == 'C' {
+			if index+1 >= len(tokens) {
+				return nil, errors.New("Git raw rename paths are missing")
+			}
+			changes = append(changes, rawFileChange{
+				change:     FileChange{Status: status, OldPath: string(tokens[index]), Path: string(tokens[index+1])},
+				patchCount: patchCount,
+			})
+			index += 2
+			continue
+		}
+		changes = append(changes, rawFileChange{
+			change:     FileChange{Status: status, Path: string(tokens[index])},
+			patchCount: patchCount,
+		})
+		index++
+	}
+	return changes, nil
+}
+
+func patchHeaderStarts(patches []byte) []int {
+	if len(patches) == 0 || !bytes.HasPrefix(patches, []byte("diff --git ")) {
+		return nil
+	}
+	starts := []int{0}
+	for offset := 1; offset < len(patches); {
+		relative := bytes.Index(patches[offset:], []byte("\ndiff --git "))
+		if relative < 0 {
+			break
+		}
+		start := offset + relative + 1
+		starts = append(starts, start)
+		offset = start + 1
+	}
+	return starts
 }
 
 func firstParent(ctx context.Context, repository *gitexec.Repository, commit string) (string, *RPCError) {

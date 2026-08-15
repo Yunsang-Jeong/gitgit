@@ -6,6 +6,7 @@
   import WorktreePicker from './WorktreePicker.svelte'
   import { formatDate } from '../lib/datetime'
   import { searchExpressionError } from '../lib/search-expression'
+  import { formatSearchCommitCount } from '../lib/search-results'
   import type {
     Pattern,
     RegisteredProject,
@@ -38,6 +39,7 @@
   export let searching = false
   export let searchProgress: SearchProgress | null = null
   export let hasSearched = false
+  export let hasMore = false
   export let stale = false
   export let applied = false
   export let scanned = 0
@@ -75,8 +77,8 @@
     onSelectSession(id)
   }
 
-  function resultCountLabel(count: number): string {
-    return `${Number(count).toLocaleString()} ${Number(count) === 1 ? 'commit' : 'commits'}`
+  function resultCountLabel(count: number, truncated = false): string {
+    return `${formatSearchCommitCount(count, truncated)} ${Number(count) === 1 && !truncated ? 'commit' : 'commits'}`
   }
 </script>
 
@@ -116,7 +118,7 @@
           <small>{session.query || 'No conditions yet'}</small>
           <footer>
             <time datetime={session.last_searched_at ?? ''}>{session.last_searched_at ? `Searched ${formatDate(session.last_searched_at, true)}` : 'Not searched'}</time>
-            {#if session.result_count > 0}<em>{resultCountLabel(session.result_count)}</em>{/if}
+            {#if session.result_count > 0}<em>{resultCountLabel(session.result_count, session.has_more)}</em>{/if}
           </footer>
         </div>
       {/each}
@@ -179,7 +181,7 @@
         </span>
         <button class="history-action" type="button" on:click={onCancelSearch}>Cancel</button>
       {:else if hasSearched}
-        <span class="search-session-progress">{scanned.toLocaleString()} scanned · {results.length.toLocaleString()} commits</span>
+        <span class="search-session-progress">{scanned.toLocaleString()} scanned · {formatSearchCommitCount(results.length, hasMore)} commits</span>
       {/if}
       <button class="history-action history-run-search" type="button" on:click={onRunSearch} disabled={disabled || !repository || searching || patterns.length === 0 || Boolean(expressionError)}>
         {searching ? 'Searching…' : 'Search'}

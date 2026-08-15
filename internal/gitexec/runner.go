@@ -32,6 +32,8 @@ type Runner struct {
 	Binary string
 }
 
+var ErrOutputLimit = errors.New("Git output exceeds limit")
+
 func NewRunner() *Runner { return &Runner{Binary: "git"} }
 
 func (r *Runner) Run(ctx context.Context, dir string, stdin io.Reader, args ...string) ([]byte, error) {
@@ -66,6 +68,62 @@ func (r *Runner) RunWithEnv(ctx context.Context, dir string, stdin io.Reader, en
 		return nil, &CommandError{Args: commandArgs, Stderr: stderr.String(), Err: err}
 	}
 	return stdout.Bytes(), nil
+}
+
+// RunWithEnvLimit is equivalent to RunWithEnv but stops the process once
+// stdout exceeds maxOutputBytes. It is intended for optional metadata whose
+// size is controlled by repository objects rather than command arguments.
+func (r *Runner) RunWithEnvLimit(
+	ctx context.Context,
+	dir string,
+	stdin io.Reader,
+	environment []string,
+	maxOutputBytes int64,
+	args ...string,
+) ([]byte, error) {
+	if maxOutputBytes < 0 {
+		return nil, ErrOutputLimit
+	}
+	if r.Binary == "" {
+		r.Binary = "git"
+	}
+	commandArgs := make([]string, 0, len(args)+3)
+	if dir != "" {
+		commandArgs = append(commandArgs, "-C", dir)
+	}
+	commandArgs = append(commandArgs, "--no-pager")
+	commandArgs = append(commandArgs, args...)
+
+	cmd := exec.CommandContext(ctx, r.Binary, commandArgs...)
+	cmd.Stdin = stdin
+	cmd.Env = append(sanitizedGitEnvironment(), "LC_ALL=C", "GIT_PAGER=cat")
+	cmd.Env = append(cmd.Env, environment...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	output, readError := io.ReadAll(io.LimitReader(stdout, maxOutputBytes+1))
+	if int64(len(output)) > maxOutputBytes {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, ErrOutputLimit
+	}
+	waitError := cmd.Wait()
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	if readError != nil {
+		return nil, readError
+	}
+	if waitError != nil {
+		return nil, &CommandError{Args: commandArgs, Stderr: stderr.String(), Err: waitError}
+	}
+	return output, nil
 }
 
 func sanitizedGitEnvironment() []string {

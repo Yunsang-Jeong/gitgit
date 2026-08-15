@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -136,6 +137,128 @@ func TestSearchCombinesSourcesWithoutDuplicateResults(t *testing.T) {
 	}
 	if len(response.MessagePatterns) != 1 || len(response.DiffPatterns) != 1 || len(response.FilePatterns) != 1 || response.Engine != "glob" {
 		t.Fatalf("incomplete response metadata: %#v", response)
+	}
+}
+
+func TestSearchEvaluatesBooleanExpressionWithinEachFile(t *testing.T) {
+	t.Parallel()
+	root := newTestRepository(t)
+	writeTestFile(t, root, "src/name-hit.txt", "stable\n")
+	writeTestFile(t, root, "src/diff-hit.txt", "stable\n")
+	gitCommitAs(t, root, "Alice", "alice@example.com", "2025-01-01T00:00:00Z", "seed files")
+	writeTestFile(t, root, "src/name-hit.txt", "stable\nsafe change\n")
+	writeTestFile(t, root, "src/diff-hit.txt", "stable\nCROSS_FILE_DIFF_TOKEN\n")
+	gitCommitAs(t, root, "Alice", "alice@example.com", "2025-02-01T00:00:00Z", "change separate files")
+
+	repo, err := gitexec.OpenRepository(context.Background(), gitexec.NewRunner(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := NewSearchService(repo).Search(context.Background(), SearchOptions{
+		Predicates: []SearchPredicate{
+			{Source: "file", Value: "**/name-hit.txt"},
+			{Source: "diff", Value: "*CROSS_FILE_DIFF_TOKEN*", Join: "and"},
+		},
+		Engine: "glob", Revision: "HEAD^!", Limit: 100, Context: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Count != 0 {
+		t.Fatalf("cross-file FILE AND DIFF produced a false-positive commit: %#v", response.Results)
+	}
+}
+
+func TestSearchAggregatesMatchedAndChangedFilesPerCommit(t *testing.T) {
+	t.Parallel()
+	root := newTestRepository(t)
+	writeTestFile(t, root, "src/one.go", "one\n")
+	writeTestFile(t, root, "src/two.go", "two\n")
+	writeTestFile(t, root, "docs/readme.md", "docs\n")
+	gitCommitAs(t, root, "Alice", "alice@example.com", "2025-01-01T00:00:00Z", "add mixed files")
+
+	repo, err := gitexec.OpenRepository(context.Background(), gitexec.NewRunner(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := NewSearchService(repo).Search(context.Background(), SearchOptions{
+		Files: []string{"**/*.go"}, Engine: "glob", Limit: 100, Context: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Count != 1 || len(response.Results) != 1 {
+		t.Fatalf("commit aggregation = %d/%d, want one result: %#v", response.Count, len(response.Results), response.Results)
+	}
+	result := response.Results[0]
+	if len(result.MatchedFiles) != 2 || len(result.ChangedFiles) != 3 {
+		t.Fatalf("matched/changed files = %d/%d, want 2/3: %#v", len(result.MatchedFiles), len(result.ChangedFiles), result)
+	}
+	for _, file := range result.MatchedFiles {
+		if !strings.HasSuffix(file.Path, ".go") || !slices.Equal(file.MatchSources, []string{"file"}) {
+			t.Fatalf("matched file = %#v, want Go file with FILE source", file)
+		}
+	}
+}
+
+func TestSearchMessageOnlyIncludesEmptyCommit(t *testing.T) {
+	t.Parallel()
+	root := newTestRepository(t)
+	gitTestCommand(t, root, "commit", "--allow-empty", "-m", "EMPTY_SEARCH_TOKEN")
+
+	repo, err := gitexec.OpenRepository(context.Background(), gitexec.NewRunner(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := NewSearchService(repo).Search(context.Background(), SearchOptions{
+		Messages: []string{"*EMPTY_SEARCH_TOKEN*"}, Engine: "glob", Limit: 100, Context: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Count != 1 {
+		t.Fatalf("empty commit message search count = %d, want 1: %#v", response.Count, response.Results)
+	}
+	result := response.Results[0]
+	if result.ChangedFiles == nil || len(result.ChangedFiles) != 0 || result.MatchedFiles == nil || len(result.MatchedFiles) != 0 {
+		t.Fatalf("empty commit file arrays = %#v/%#v, want present empty arrays", result.MatchedFiles, result.ChangedFiles)
+	}
+	if !slices.Equal(result.MatchSources, []string{"msg"}) {
+		t.Fatalf("empty commit match sources = %v, want msg", result.MatchSources)
+	}
+}
+
+func TestSearchLimitCountsUniqueCommitsAndReportsHasMore(t *testing.T) {
+	t.Parallel()
+	root := newTestRepository(t)
+	for index, message := range []string{"LIMIT_SHARED first", "LIMIT_SHARED second", "unmatched newest"} {
+		writeTestFile(t, root, fmt.Sprintf("%d.txt", index), message+"\n")
+		gitCommitAs(t, root, "Alice", "alice@example.com", fmt.Sprintf("2025-01-0%dT00:00:00Z", index+1), message)
+	}
+
+	repo, err := gitexec.OpenRepository(context.Background(), gitexec.NewRunner(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewSearchService(repo)
+	truncated, err := service.Search(context.Background(), SearchOptions{
+		Messages: []string{"*LIMIT_SHARED*"}, Engine: "glob", Limit: 1, Context: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated.Count != 1 || !truncated.HasMore {
+		t.Fatalf("limited commit response = count %d hasMore %t, want 1/true: %#v", truncated.Count, truncated.HasMore, truncated.Results)
+	}
+
+	complete, err := service.Search(context.Background(), SearchOptions{
+		Messages: []string{"*LIMIT_SHARED second*"}, Engine: "glob", Limit: 1, Context: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete.Count != 1 || complete.HasMore {
+		t.Fatalf("complete commit response = count %d hasMore %t, want 1/false: %#v", complete.Count, complete.HasMore, complete.Results)
 	}
 }
 

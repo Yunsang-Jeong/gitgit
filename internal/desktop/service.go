@@ -39,16 +39,18 @@ type SearchRequest struct {
 }
 
 type SearchResult struct {
-	Author       app.Author       `json:"author"`
-	Commit       string           `json:"commit"`
-	ShortCommit  string           `json:"short_commit"`
-	Message      string           `json:"message"`
-	Date         string           `json:"date"`
-	Refs         []string         `json:"refs,omitempty"`
-	File         app.FileChange   `json:"file"`
-	Files        []app.FileChange `json:"files"`
-	Diff         string           `json:"diff"`
-	MatchSources []string         `json:"match_sources"`
+	Author       app.Author            `json:"author"`
+	Commit       string                `json:"commit"`
+	ShortCommit  string                `json:"short_commit"`
+	Message      string                `json:"message"`
+	Date         string                `json:"date"`
+	Refs         []string              `json:"refs,omitempty"`
+	File         app.FileChange        `json:"file"`
+	Files        []app.FileChange      `json:"files"`
+	Diff         string                `json:"diff"`
+	MatchSources []string              `json:"match_sources"`
+	MatchedFiles []app.SearchFileMatch `json:"matched_files"`
+	ChangedFiles []app.FileChange      `json:"changed_files"`
 }
 
 type SearchResponse struct {
@@ -56,6 +58,7 @@ type SearchResponse struct {
 	AllRefs bool           `json:"all_refs"`
 	Scanned int            `json:"scanned"`
 	Count   int            `json:"count"`
+	HasMore bool           `json:"has_more"`
 	Results []SearchResult `json:"results"`
 }
 
@@ -912,9 +915,14 @@ func (s *Service) SearchWithProgress(ctx context.Context, request SearchRequest,
 			Files:        match.Files,
 			Diff:         match.Diff,
 			MatchSources: match.MatchSources,
+			MatchedFiles: append([]app.SearchFileMatch(nil), match.MatchedFiles...),
+			ChangedFiles: append([]app.FileChange(nil), match.ChangedFiles...),
 		})
 	}
-	return SearchResponse{Scope: scope, AllRefs: options.All, Scanned: response.Scanned, Count: len(results), Results: results}, nil
+	return SearchResponse{
+		Scope: scope, AllRefs: options.All, Scanned: response.Scanned,
+		Count: len(results), HasMore: response.HasMore, Results: results,
+	}, nil
 }
 
 func (s *Service) CancelSearch() {

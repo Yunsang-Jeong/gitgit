@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: search
-last_updated: 2026-08-01
+last_updated: 2026-08-15
 ---
 
 # Search Module
@@ -131,11 +131,11 @@ Valid한 Query input은 즉시 session에 반영되지만 기존 result는 자�
 
 실행 중에는 실제 방문한 commit 수와 scan 대상 commit 수를 progress로 표시하고 Cancel action을 제공한다. Progress event는 repository 크기와 비례해 무제한 발생하지 않도록 한 실행당 약 200회 이하의 간격으로 제한한다. 실패하거나 새 query가 실행 중이어도 이전 성공 결과가 있으면 교체하지 않고 유지한다.
 
-Backend는 scope의 commit metadata를 한 번의 `git log`로 읽으며 별도 `rev-list --count`나 result별 metadata 조회를 실행하지 않는다. Changed-file metadata는 500-commit 단위 `git diff-tree --stdin` batch로 읽고, result limit에 도달하면 뒤 batch는 실행하지 않는다. Message/FILE-only search는 table에 쓰지 않는 unified diff payload를 만들지 않으며, DIFF condition의 정확한 file별 content 판정에만 필요한 file diff를 지연해서 읽는다.
+Backend는 scope의 commit metadata를 한 번의 `git log`로 읽으며 별도 `rev-list --count`나 result별 metadata 조회를 실행하지 않는다. Changed-file metadata는 500-commit 단위 `git diff-tree --stdin` batch로 읽고, result limit 뒤 실제 matching commit 하나를 확인해 `has_more`를 결정하면 이후 batch를 실행하지 않는다. Message/FILE-only search는 table에 쓰지 않는 unified diff payload를 만들지 않으며, DIFF condition의 정확한 file별 content 판정에만 필요한 file diff를 지연해서 읽는다.
 
 새 Search가 시작되거나 Cancel을 누르면 이전 search context와 system Git process를 함께 취소한다. Partial result는 event로 흘려보내지 않고 완료된 response만 session의 마지막 성공 결과로 교체한다. 이 경계는 빠른 중간 표시보다 session 결과의 원자성과 retry 동작을 우선한다.
 
-Backend match는 file 단위지만 UI는 같은 commit의 match를 한 행으로 합친다. Search의 기본 사용자 흐름은 다음과 같다.
+Backend는 Boolean expression을 file 단위로 평가한 뒤 같은 commit의 hit를 하나의 result로 합친다. 따라서 서로 다른 두 file의 `FILE:`와 `DIFF:` hit가 하나의 `AND`를 잘못 만족하지 않으면서도, UI와 wire의 결과 단위는 처음부터 commit이다. Search의 기본 사용자 흐름은 다음과 같다.
 
 ```text
 조건 작성 → Search 실행 → matching commit 선택 → Inspector에서 changed files 확인 → file diff 확인
@@ -148,10 +148,11 @@ Backend match는 file 단위지만 UI는 같은 commit의 match를 한 행으로
 - Branch/ref 정보는 Message와 같은 행의 작은 badge로 표시
 - 선택한 commit은 우측 Inspector에서 metadata, 전체 changed files와 file diff를 확인
 - FILE/DIFF가 실제로 일치한 file만 Inspector에서 `Match`로 표시하고 Message-only match는 모든 changed file을 match로 표시하지 않음
+- Result contract는 `matched_files`와 commit 전체 `changed_files`를 분리하며, Message-only empty commit도 file을 꾸며내지 않고 결과에 포함함
 - Status bar에는 scanned commit 수와 matching commit 수를 표시
 - Result table은 Commit table과 같은 ARIA table 구조와 roving tabindex, 방향키 이동 규칙을 사용
 
-현재 request limit은 file-level match 250개다. 매우 많은 file이 match하는 commit은 이 limit을 빠르게 사용할 수 있으므로 결과가 repository 전체의 exhaustive count라고 가정해서는 안 된다.
+현재 request limit은 unique matching commit 250개다. 한 commit의 많은 matching file이 limit을 소진하지 않는다. Backend가 limit 뒤 실제 matching commit을 하나 더 확인하면 `has_more`를 true로 반환하므로 client는 `250+`처럼 truncated 결과임을 표시하고 exhaustive count로 오해시키지 않는다.
 
 Commit module의 Preset은 Search result에 적용되지 않는다. Search는 condition 자체가 결과 범위를 정의한다.
 

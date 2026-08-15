@@ -1,3 +1,5 @@
+import { parseCanonicalWebRemote } from '../shared/web-remotes.js'
+
 export const PROTOCOL_VERSION = 1 as const
 export const PROTOCOL_TRANSPORT = 'ndjson-jsonrpc-2.0-stdio' as const
 export const PROTOCOL_LINE_BASE = 1 as const
@@ -51,6 +53,7 @@ export interface RepositoryDiscovery {
   gitDir: string
   branch: string
   head: string
+  webRemotes?: string[]
 }
 
 export interface BlameLine {
@@ -75,6 +78,12 @@ export interface BlameLinesRequest {
 
 export interface BlameLinesResponse {
   lines: BlameLine[]
+  commitMetadata: Record<string, BlameCommitMetadata>
+}
+
+export interface BlameCommitMetadata {
+  message: string
+  parentCount: number
 }
 
 export interface HistoryFileChange {
@@ -173,6 +182,10 @@ export interface SearchFile {
   oldPath?: string
 }
 
+export interface SearchMatchedFile extends SearchFile {
+  matchSources: Array<'diff' | 'file'>
+}
+
 export interface SearchResult {
   commit: string
   shortCommit: string
@@ -180,7 +193,8 @@ export interface SearchResult {
   author: SearchAuthor
   date: string
   refs: string[]
-  files: SearchFile[]
+  matchedFiles: SearchMatchedFile[]
+  changedFiles: SearchFile[]
   matchSources: SearchPatternSource[]
 }
 
@@ -189,6 +203,7 @@ export interface SearchResponse {
   allRefs: boolean
   scanned: number
   count: number
+  hasMore: boolean
   results: SearchResult[]
 }
 
@@ -302,7 +317,21 @@ export function parseRepositoryDiscovery(value: unknown): RepositoryDiscovery {
       throw new HelperProtocolError(`repository.discover omitted ${key}.`, 'invalid_repository')
     }
   }
-  return result as unknown as RepositoryDiscovery
+  const webRemotes = result.webRemotes
+  if (webRemotes !== undefined
+    && (!Array.isArray(webRemotes)
+      || webRemotes.some((remote) => !parseCanonicalWebRemote(remote))
+      || new Set(webRemotes).size !== webRemotes.length)) {
+    throw new HelperProtocolError('repository.discover returned invalid webRemotes.', 'invalid_repository')
+  }
+  return {
+    root: result.root as string,
+    commonDir: result.commonDir as string,
+    gitDir: result.gitDir as string,
+    branch: result.branch as string,
+    head: result.head as string,
+    ...(Array.isArray(webRemotes) && webRemotes.length > 0 ? { webRemotes: [...webRemotes] as string[] } : {}),
+  }
 }
 
 function optionalString(value: unknown, description: string): string | undefined {
@@ -327,12 +356,12 @@ export function parseBlameLinesResponse(value: unknown): BlameLinesResponse {
   if (!Array.isArray(response.lines)) {
     throw new HelperProtocolError('blame.lines omitted lines.', 'invalid_blame_response')
   }
-  return {
-    lines: response.lines.map((entry) => {
+  const lines = response.lines.map((entry) => {
       const line = record(entry, 'blame line')
       const message = line.message ?? line.summary
       if (!Number.isSafeInteger(line.line) || (line.line as number) < 1
-        || typeof line.commit !== 'string' || typeof line.date !== 'string'
+        || typeof line.commit !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(line.commit)
+        || typeof line.date !== 'string'
         || typeof message !== 'string') {
         throw new HelperProtocolError('blame.lines returned invalid line metadata.', 'invalid_blame_response')
       }
@@ -350,7 +379,28 @@ export function parseBlameLinesResponse(value: unknown): BlameLinesResponse {
         message,
         ...(content ? { content } : {}),
       }
-    }),
+    })
+  const lineCommits = new Set(lines.map((line) => line.commit))
+  const commitMetadataValue = response.commitMetadata ?? {}
+  const commitMetadataRecord = record(commitMetadataValue, 'blame commit metadata')
+  const commitMetadata: Record<string, BlameCommitMetadata> = {}
+  for (const [commit, value] of Object.entries(commitMetadataRecord)) {
+    const metadata = record(value, 'blame commit metadata entry')
+    if (!lineCommits.has(commit)
+      || typeof metadata.message !== 'string'
+      || !Number.isSafeInteger(metadata.parentCount)
+      || (metadata.parentCount as number) < 0) {
+      throw new HelperProtocolError('blame.lines returned invalid commit metadata.', 'invalid_blame_response')
+    }
+    if ((metadata.parentCount as number) > 64) continue
+    commitMetadata[commit] = {
+      message: metadata.message,
+      parentCount: metadata.parentCount as number,
+    }
+  }
+  return {
+    commitMetadata,
+    lines,
   }
 }
 
@@ -453,13 +503,27 @@ function parseSearchFile(value: unknown): SearchFile {
   }
 }
 
+function parseSearchMatchedFile(value: unknown): SearchMatchedFile {
+  const file = record(value, 'matched Search file')
+  const parsed = parseSearchFile(file)
+  const sources = file.matchSources ?? file.match_sources
+  if (!Array.isArray(sources) || sources.length === 0
+    || sources.some((source) => source !== 'diff' && source !== 'file')
+    || new Set(sources).size !== sources.length) {
+    throw new HelperProtocolError('search.run returned invalid matched file sources.', 'invalid_search_response')
+  }
+  return { ...parsed, matchSources: [...sources] as Array<'diff' | 'file'> }
+}
+
 function parseSearchResult(value: unknown): SearchResult {
   const result = record(value, 'Search result')
   const author = record(result.author, 'Search author')
-  const filesValue = result.files
+  const matchedFilesValue = result.matchedFiles ?? result.matched_files
+  const changedFilesValue = result.changedFiles ?? result.changed_files
   const sourcesValue = result.matchSources ?? result.match_sources
   const refsValue = result.refs ?? []
-  if (!Array.isArray(filesValue) || !Array.isArray(sourcesValue) || !Array.isArray(refsValue)) {
+  if (!Array.isArray(matchedFilesValue) || !Array.isArray(changedFilesValue)
+    || !Array.isArray(sourcesValue) || !Array.isArray(refsValue)) {
     throw new HelperProtocolError('search.run returned invalid result arrays.', 'invalid_search_response')
   }
   if (sourcesValue.some((source) => source !== 'msg' && source !== 'diff' && source !== 'file')) {
@@ -467,6 +531,12 @@ function parseSearchResult(value: unknown): SearchResult {
   }
   if (refsValue.some((ref) => typeof ref !== 'string')) {
     throw new HelperProtocolError('search.run returned invalid refs.', 'invalid_search_response')
+  }
+  const matchedFiles = matchedFilesValue.map(parseSearchMatchedFile)
+  const changedFiles = changedFilesValue.map(parseSearchFile)
+  const changedKeys = new Set(changedFiles.map(searchFileKey))
+  if (matchedFiles.some((file) => !changedKeys.has(searchFileKey(file)))) {
+    throw new HelperProtocolError('search.run returned a matched file outside changedFiles.', 'invalid_search_response')
   }
   return {
     commit: stringField(result, 'commit'),
@@ -478,15 +548,21 @@ function parseSearchResult(value: unknown): SearchResult {
     },
     date: stringField(result, 'date'),
     refs: [...refsValue] as string[],
-    files: filesValue.map(parseSearchFile),
+    matchedFiles,
+    changedFiles,
     matchSources: [...sourcesValue] as SearchPatternSource[],
   }
+}
+
+function searchFileKey(file: SearchFile): string {
+  return `${file.status}\u0000${file.oldPath ?? ''}\u0000${file.path}`
 }
 
 export function parseSearchResponse(value: unknown): SearchResponse {
   const result = record(value, 'Search response')
   const allRefs = result.allRefs ?? result.all_refs
-  if (typeof allRefs !== 'boolean' || !Array.isArray(result.results)) {
+  const hasMore = result.hasMore ?? result.has_more
+  if (typeof allRefs !== 'boolean' || typeof hasMore !== 'boolean' || !Array.isArray(result.results)) {
     throw new HelperProtocolError('search.run returned invalid scope or results.', 'invalid_search_response')
   }
   const results = result.results.map(parseSearchResult)
@@ -494,11 +570,15 @@ export function parseSearchResponse(value: unknown): SearchResponse {
   if (count !== results.length) {
     throw new HelperProtocolError('search.run count does not match results.', 'invalid_search_response')
   }
+  if (new Set(results.map((entry) => entry.commit)).size !== results.length) {
+    throw new HelperProtocolError('search.run returned duplicate commits.', 'invalid_search_response')
+  }
   return {
     scope: stringField(result, 'scope'),
     allRefs,
     scanned: integerField(result, 'scanned'),
     count,
+    hasMore,
     results,
   }
 }

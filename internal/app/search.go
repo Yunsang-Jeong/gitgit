@@ -49,16 +49,28 @@ type FileChange struct {
 	Path    string `json:"path"`
 }
 
+type SearchFileMatch struct {
+	FileChange
+	MatchSources []string `json:"match_sources"`
+}
+
 type SearchMatch struct {
-	Author       Author       `json:"author"`
-	Commit       string       `json:"commit"`
-	Message      string       `json:"message"`
-	Date         string       `json:"date"`
-	Refs         []string     `json:"refs,omitempty"`
-	File         FileChange   `json:"file"`
-	Files        []FileChange `json:"files"`
-	Diff         string       `json:"diff"`
-	MatchSources []string     `json:"match_sources,omitempty"`
+	Author       Author            `json:"author"`
+	Commit       string            `json:"commit"`
+	Message      string            `json:"message"`
+	Date         string            `json:"date"`
+	Refs         []string          `json:"refs,omitempty"`
+	MatchedFiles []SearchFileMatch `json:"matched_files"`
+	ChangedFiles []FileChange      `json:"changed_files"`
+	MatchSources []string          `json:"match_sources"`
+
+	// File, Files, and Diff keep the existing Desktop adapter source-compatible
+	// while it migrates to the commit-first contract. They are aliases of the
+	// first matched file and ChangedFiles and are not part of the canonical wire
+	// representation.
+	File  FileChange   `json:"-"`
+	Files []FileChange `json:"-"`
+	Diff  string       `json:"-"`
 }
 
 type SearchProgress struct {
@@ -75,6 +87,7 @@ type SearchResponse struct {
 	Results         []SearchMatch `json:"results"`
 	Count           int           `json:"count"`
 	Scanned         int           `json:"scanned"`
+	HasMore         bool          `json:"has_more"`
 }
 
 type SearchService struct {
@@ -117,12 +130,16 @@ func (s *SearchService) SearchWithProgress(ctx context.Context, options SearchOp
 		return SearchResponse{}, err
 	}
 	hasDiffPredicate := false
+	hasFilePredicate := false
 	for _, predicate := range predicates {
-		if predicate.Source == "diff" {
+		switch predicate.Source {
+		case "diff":
 			hasDiffPredicate = true
-			break
+		case "file":
+			hasFilePredicate = true
 		}
 	}
+	hasFileScopedPredicate := hasDiffPredicate || hasFilePredicate
 	commits, err := s.listCommits(ctx, options)
 	if err != nil {
 		return SearchResponse{}, searchGitError("list history", err)
@@ -165,60 +182,113 @@ func (s *SearchService) SearchWithProgress(ctx context.Context, options SearchOp
 			if onProgress != nil && (visited == 1 || visited == len(commits) || visited%progressStep == 0) {
 				onProgress(SearchProgress{Scanned: visited, Total: len(commits)})
 			}
-			for _, change := range changesByCommit[commit.OID] {
-				hits := make([]bool, len(predicates))
-				for index := range predicates {
-					switch predicates[index].Source {
-					case "msg":
-						hits[index] = predicates[index].matcher(commit.Message)
-					case "file":
-						hits[index] = matchFileChange(change, predicates[index].matcher, options.FollowRename, predicates[index].trackedPaths)
-					}
-				}
-				if eligibleCommits != nil && !eligibleCommits[commit.OID] {
-					continue
-				}
-				if !hasDiffPredicate && !evaluateSearchExpression(predicates, hits) {
-					continue
-				}
-				diff := ""
-				if hasDiffPredicate || !options.OmitResultDiff {
-					var diffErr error
-					diff, diffErr = s.fileDiff(ctx, commit.OID, change, options.Context)
-					if diffErr != nil {
-						return SearchResponse{}, searchGitError("read file diff", diffErr)
-					}
-				}
-				if hasDiffPredicate {
-					lines := changedLines(diff)
-					for index := range predicates {
-						if predicates[index].Source == "diff" {
-							hits[index] = predicates[index].matcher(lines)
-						}
-					}
-				}
-				if !evaluateSearchExpression(predicates, hits) {
-					continue
-				}
-				sources := make([]string, 0, 3)
-				for index, predicate := range predicates {
-					if hits[index] && !slices.Contains(sources, predicate.Source) {
-						sources = append(sources, predicate.Source)
-					}
-				}
-				results = append(results, SearchMatch{
-					Author: commit.Author, Commit: commit.OID, Message: commit.Message,
-					Date: commit.Date, Refs: append([]string(nil), commit.Refs...), File: change,
-					Files: append([]FileChange(nil), changesByCommit[commit.OID]...),
-					Diff:  diff, MatchSources: sources,
-				})
-				if len(results) >= options.Limit {
-					return searchResponse(options, results, visited), nil
+			changedFiles := changesByCommit[commit.OID]
+			messageHits := make([]bool, len(predicates))
+			for index := range predicates {
+				if predicates[index].Source == "msg" {
+					messageHits[index] = predicates[index].matcher(commit.Message)
 				}
 			}
+
+			eligible := eligibleCommits == nil || eligibleCommits[commit.OID]
+			matched := false
+			matchSources := make([]string, 0, 3)
+			matchedFiles := make([]SearchFileMatch, 0)
+			firstMatchedDiff := ""
+			if !hasFileScopedPredicate {
+				matched = eligible && evaluateSearchExpression(predicates, messageHits)
+				if matched {
+					matchSources = appendMatchSources(matchSources, predicates, messageHits, false)
+				}
+			} else {
+				for _, change := range changedFiles {
+					hits := append([]bool(nil), messageHits...)
+					for index := range predicates {
+						if predicates[index].Source == "file" {
+							hits[index] = matchFileChange(change, predicates[index].matcher, options.FollowRename, predicates[index].trackedPaths)
+						}
+					}
+					// Rename lineage must traverse commits excluded by author/date
+					// filters, but excluded commits must not load diffs or match.
+					if !eligible {
+						continue
+					}
+
+					diff := ""
+					if hasDiffPredicate {
+						var diffErr error
+						diff, diffErr = s.fileDiff(ctx, commit.OID, change, options.Context)
+						if diffErr != nil {
+							return SearchResponse{}, searchGitError("read file diff", diffErr)
+						}
+						lines := changedLines(diff)
+						for index := range predicates {
+							if predicates[index].Source == "diff" {
+								hits[index] = predicates[index].matcher(lines)
+							}
+						}
+					}
+					if !evaluateSearchExpression(predicates, hits) {
+						continue
+					}
+
+					matched = true
+					matchSources = appendMatchSources(matchSources, predicates, hits, false)
+					fileSources := appendMatchSources(nil, predicates, hits, true)
+					if len(fileSources) > 0 {
+						if len(matchedFiles) == 0 && diff == "" && !options.OmitResultDiff {
+							var diffErr error
+							diff, diffErr = s.fileDiff(ctx, commit.OID, change, options.Context)
+							if diffErr != nil {
+								return SearchResponse{}, searchGitError("read file diff", diffErr)
+							}
+						}
+						if len(matchedFiles) == 0 {
+							firstMatchedDiff = diff
+						}
+						matchedFiles = append(matchedFiles, SearchFileMatch{
+							FileChange:   change,
+							MatchSources: fileSources,
+						})
+					}
+				}
+
+				// A message branch can match an empty commit even when another
+				// branch of the expression contains FILE or DIFF predicates.
+				if eligible && evaluateSearchExpression(predicates, messageHits) {
+					matched = true
+					matchSources = appendMatchSources(matchSources, predicates, messageHits, false)
+				}
+			}
+			if !matched {
+				continue
+			}
+			if len(results) >= options.Limit {
+				return searchResponse(options, results, visited, true), nil
+			}
+
+			result := SearchMatch{
+				Author: commit.Author, Commit: commit.OID, Message: commit.Message,
+				Date: commit.Date, Refs: append([]string(nil), commit.Refs...),
+				MatchedFiles: matchedFiles, ChangedFiles: changedFiles,
+				Files: changedFiles, MatchSources: matchSources,
+			}
+			if len(matchedFiles) > 0 {
+				result.File = matchedFiles[0].FileChange
+				result.Diff = firstMatchedDiff
+			} else if len(changedFiles) > 0 {
+				result.File = changedFiles[0]
+				if !options.OmitResultDiff {
+					result.Diff, err = s.fileDiff(ctx, commit.OID, result.File, options.Context)
+					if err != nil {
+						return SearchResponse{}, searchGitError("read file diff", err)
+					}
+				}
+			}
+			results = append(results, result)
 		}
 	}
-	return searchResponse(options, results, visited), nil
+	return searchResponse(options, results, visited, false), nil
 }
 
 func validateSearchOptions(options SearchOptions) error {
@@ -425,7 +495,22 @@ func (s *SearchService) fileDiff(ctx context.Context, oid string, change FileCha
 	return strings.TrimRight(string(out), "\n"), nil
 }
 
-func searchResponse(options SearchOptions, results []SearchMatch, scanned int) SearchResponse {
+func appendMatchSources(
+	destination []string,
+	predicates []compiledSearchPredicate,
+	hits []bool,
+	fileScopedOnly bool,
+) []string {
+	for index, predicate := range predicates {
+		if !hits[index] || (fileScopedOnly && predicate.Source == "msg") || slices.Contains(destination, predicate.Source) {
+			continue
+		}
+		destination = append(destination, predicate.Source)
+	}
+	return destination
+}
+
+func searchResponse(options SearchOptions, results []SearchMatch, scanned int, hasMore bool) SearchResponse {
 	messages, diffs, files := searchPatternsBySource(options)
 	return SearchResponse{
 		MessagePatterns: messages,
@@ -436,6 +521,7 @@ func searchResponse(options SearchOptions, results []SearchMatch, scanned int) S
 		Results:         results,
 		Count:           len(results),
 		Scanned:         scanned,
+		HasMore:         hasMore,
 	}
 }
 

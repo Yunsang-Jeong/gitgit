@@ -26,12 +26,14 @@
   "methodContracts": {
     "repository.discover": {
       "requiredParams": ["path"],
-      "requiredResult": ["root", "commonDir", "gitDir", "branch", "head"]
+      "requiredResult": ["root", "commonDir", "gitDir", "branch", "head"],
+      "optionalResult": ["webRemotes"]
     },
     "blame.lines": {
       "requiredParams": ["repositoryRoot", "relativePath", "startLine", "endLine"],
       "optionalParams": ["revision", "contents", "ignoreWhitespace"],
-      "requiredResult": ["lines"]
+      "requiredResult": ["lines"],
+      "optionalResult": ["commitMetadata"]
     },
     "history.file": {
       "requiredParams": ["repositoryRoot", "relativePath"],
@@ -41,7 +43,9 @@
     "search.run": {
       "requiredParams": ["repositoryRoot", "patterns"],
       "optionalParams": ["engine", "scope", "allRefs", "author", "since", "until", "followRename", "limit", "context"],
-      "requiredResult": ["scope", "allRefs", "scanned", "count", "results"]
+      "requiredResult": ["scope", "allRefs", "scanned", "count", "hasMore", "results"],
+      "requiredResultItem": ["author", "commit", "shortCommit", "message", "date", "matchedFiles", "changedFiles", "matchSources"],
+      "requiredMatchedFile": ["status", "path", "matchSources"]
     },
     "revision.content": {
       "requiredParams": ["repositoryRoot", "revision", "relativePath"],

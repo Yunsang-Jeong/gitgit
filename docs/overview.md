@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: overview
 scope: project
-last_updated: 2026-08-14
+last_updated: 2026-08-15
 ---
 
 # GitGit Overview
@@ -60,7 +60,7 @@ GitGit이 우선하는 방향은 세 가지다.
 - Search는 Commit toolbar가 아니라 독립 workspace다.
 - 여러 in-memory Search session을 명시적으로 만들고 alias, Project, Worktree, Branch, query, 마지막 실행 시각과 마지막 성공 결과를 각각 유지하거나 삭제한다.
 - `Message`, `DIFF`, `FILE` condition을 AND/OR로 조합하고 인접한 행을 선택해 visual parenthesis group을 만들며, 생성된 expression을 함께 표시한다.
-- 결과는 file-level backend match를 commit 단위 한 행으로 합쳐 표시하고, compact session sidebar와 Inspector를 함께 제공해 선택한 commit의 changed files와 diff를 조사한다.
+- Backend는 file별 Boolean expression을 평가한 뒤 unique commit result로 합치며, 실제 `matched files`와 commit 전체 `changed files`를 분리한다. Desktop은 compact session sidebar와 Inspector를 함께 제공해 선택한 commit의 changed files와 diff를 조사한다.
 
 상세 규칙은 [Search](search.md)를 따른다.
 
@@ -77,8 +77,8 @@ GitGit이 우선하는 방향은 세 가지다.
 ### Visual Studio Code
 
 - Local VS Code에서 active file의 line blame과 file history를 조회한다.
-- 현재 repository에서 GitGit Search를 실행하고 결과 commit과 file을 editor navigation에 연결한다.
-- 선택한 commit이 현재 file에 만든 target range와 deletion anchor를 editor decoration으로 표시한다.
+- 현재 repository에서 GitGit Search를 native Tree View와 QuickInput으로 실행하고, commit-first 결과의 matched/changed file을 editor navigation에 연결한다.
+- 선택한 commit의 read-only revision snapshot을 열고 target range와 deletion anchor를 editor decoration으로 표시한다. File 전체 삭제는 parent snapshot을 연다.
 - Extension은 target별 bundled helper를 사용하며 Desktop 설치나 실행에 의존하지 않는다.
 - v0.1 VSIX target은 `darwin-arm64`, `darwin-x64`, `win32-x64`로 한정한다.
 
@@ -94,9 +94,9 @@ apps/
 └── vscode/                  # 독립 VSIX package
     ├── src/
     │   ├── extension.ts     # composition root
-    │   ├── editor/          # blame, history, commit highlight
+    │   ├── editor/          # blame, history, revision snapshot과 commit highlight
     │   ├── helper/          # helper client와 protocol parser
-    │   ├── search/          # expression, state, Webview
+    │   ├── search/          # expression, state, native Tree View와 QuickInput
     │   └── shared/          # repository identifier와 path 규칙
     └── tests/               # src feature 경계를 그대로 mirror
 cmd/
@@ -180,5 +180,5 @@ VS Code extension v0.1은 같은 extension ID와 version으로 `darwin-arm64`, `
 - GitGit은 자동 push, force push 또는 remote branch 삭제를 수행하지 않는다.
 - Worktree 생성·이동과 sparse-checkout mutation은 아직 제공하지 않는다.
 - Search session persistence와 background search queue는 아직 제공하지 않는다.
-- PR/MR/CI provider integration은 아직 제공하지 않는다.
+- PR/MR/CI provider API integration은 아직 제공하지 않는다. VS Code blame의 local metadata 기반 review link 추론은 network integration으로 취급하지 않는다.
 - VS Code extension과 helper는 read-only이며 repository mutation이나 network operation을 수행하지 않는다.

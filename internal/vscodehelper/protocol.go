@@ -98,11 +98,12 @@ type RepositoryDiscoverParams struct {
 }
 
 type RepositoryDiscoverResult struct {
-	Root      string `json:"root"`
-	CommonDir string `json:"commonDir"`
-	GitDir    string `json:"gitDir"`
-	Branch    string `json:"branch"`
-	Head      string `json:"head"`
+	Root       string   `json:"root"`
+	CommonDir  string   `json:"commonDir"`
+	GitDir     string   `json:"gitDir"`
+	Branch     string   `json:"branch"`
+	Head       string   `json:"head"`
+	WebRemotes []string `json:"webRemotes,omitempty"`
 }
 
 type RepositoryParams struct {
@@ -173,7 +174,13 @@ type BlameLine struct {
 }
 
 type BlameLinesResult struct {
-	Lines []BlameLine `json:"lines"`
+	Lines          []BlameLine                    `json:"lines"`
+	CommitMetadata map[string]BlameCommitMetadata `json:"commitMetadata,omitempty"`
+}
+
+type BlameCommitMetadata struct {
+	Message     string `json:"message"`
+	ParentCount int    `json:"parentCount"`
 }
 
 type HistoryFileParams struct {
@@ -272,16 +279,22 @@ func (p SearchRunParams) followRename() bool {
 }
 
 type SearchResult struct {
-	Author       Author       `json:"author"`
-	Commit       string       `json:"commit"`
-	ShortCommit  string       `json:"shortCommit"`
-	Message      string       `json:"message"`
-	Date         string       `json:"date"`
-	Refs         []string     `json:"refs,omitempty"`
-	File         FileChange   `json:"file"`
-	Files        []FileChange `json:"files"`
-	Diff         string       `json:"diff"`
-	MatchSources []string     `json:"matchSources"`
+	Author       Author              `json:"author"`
+	Commit       string              `json:"commit"`
+	ShortCommit  string              `json:"shortCommit"`
+	Message      string              `json:"message"`
+	Date         string              `json:"date"`
+	Refs         []string            `json:"refs,omitempty"`
+	MatchedFiles []SearchMatchedFile `json:"matchedFiles"`
+	ChangedFiles []FileChange        `json:"changedFiles"`
+	MatchSources []string            `json:"matchSources"`
+}
+
+type SearchMatchedFile struct {
+	Status       string   `json:"status"`
+	OldPath      string   `json:"oldPath,omitempty"`
+	Path         string   `json:"path"`
+	MatchSources []string `json:"matchSources"`
 }
 
 type SearchRunResult struct {
@@ -289,6 +302,7 @@ type SearchRunResult struct {
 	AllRefs bool           `json:"allRefs"`
 	Scanned int            `json:"scanned"`
 	Count   int            `json:"count"`
+	HasMore bool           `json:"hasMore"`
 	Results []SearchResult `json:"results"`
 }
 

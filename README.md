@@ -5,9 +5,9 @@
 - **Commit**: worktree, branch를 선택하고 commit을 열람하며, 제한된 local history의 순서와 metadata를 수정할 수 있다. Changed files와 diff는 현재 read-only다.
 - **Worktree**: 연결된 worktree의 branch, path, dirty/locked/sparse/merge 상태를 비교하고 정리한다.
 - **Search**: 정밀한 blame을 위해 조금은 변태같이 commit을 뒤적거린다.
-- **VS Code**: bundled read-only helper로 line blame, Search와 commit change highlight를 editor 안에서 제공한다.
+- **VS Code**: bundled read-only helper로 line blame, Search와 immutable revision snapshot의 commit change highlight를 editor 안에서 제공한다.
 
-## QuickStart
+## QuickStart (Desktop/macOS)
 
 요구 환경:
 
@@ -22,6 +22,8 @@ $ task install
 ```
 
 실행할 GUI app은 `$HOME/Applications/GitGit.app` 하나다. `task install`은 이 app을 교체한 뒤 중간 build bundle을 삭제한다.
+
+VS Code extension의 지원 target과 VSIX build/install 절차는 [Visual Studio Code](docs/vscode.md)를 따른다.
 
 ## Docs
 

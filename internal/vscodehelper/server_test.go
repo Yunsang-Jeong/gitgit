@@ -16,14 +16,24 @@ import (
 )
 
 type protocolManifest struct {
-	ProtocolVersion int      `json:"protocolVersion"`
-	Transport       string   `json:"transport"`
-	LineBase        int      `json:"lineBase"`
-	ReadOnly        bool     `json:"readOnly"`
-	Network         bool     `json:"network"`
-	MaxOutputBytes  int      `json:"maxOutputBytes"`
-	Methods         []string `json:"methods"`
-	Notifications   []string `json:"notifications"`
+	ProtocolVersion int                               `json:"protocolVersion"`
+	Transport       string                            `json:"transport"`
+	LineBase        int                               `json:"lineBase"`
+	ReadOnly        bool                              `json:"readOnly"`
+	Network         bool                              `json:"network"`
+	MaxOutputBytes  int                               `json:"maxOutputBytes"`
+	Methods         []string                          `json:"methods"`
+	Notifications   []string                          `json:"notifications"`
+	MethodContracts map[string]protocolMethodContract `json:"methodContracts"`
+}
+
+type protocolMethodContract struct {
+	RequiredParams      []string `json:"requiredParams"`
+	OptionalParams      []string `json:"optionalParams"`
+	RequiredResult      []string `json:"requiredResult"`
+	OptionalResult      []string `json:"optionalResult"`
+	RequiredResultItem  []string `json:"requiredResultItem"`
+	RequiredMatchedFile []string `json:"requiredMatchedFile"`
 }
 
 type wireResponse struct {
@@ -73,6 +83,20 @@ func TestProtocolMatchesCanonicalManifest(t *testing.T) {
 	}
 	if !reflect.DeepEqual(manifest.Notifications, Notifications) {
 		t.Fatalf("notifications = %#v, want %#v", Notifications, manifest.Notifications)
+	}
+	searchContract, ok := manifest.MethodContracts["search.run"]
+	if !ok {
+		t.Fatal("canonical manifest omitted search.run method contract")
+	}
+	wantSearchContract := protocolMethodContract{
+		RequiredParams:      []string{"repositoryRoot", "patterns"},
+		OptionalParams:      []string{"engine", "scope", "allRefs", "author", "since", "until", "followRename", "limit", "context"},
+		RequiredResult:      []string{"scope", "allRefs", "scanned", "count", "hasMore", "results"},
+		RequiredResultItem:  []string{"author", "commit", "shortCommit", "message", "date", "matchedFiles", "changedFiles", "matchSources"},
+		RequiredMatchedFile: []string{"status", "path", "matchSources"},
+	}
+	if !reflect.DeepEqual(searchContract, wantSearchContract) {
+		t.Fatalf("search.run contract = %#v, want %#v", searchContract, wantSearchContract)
 	}
 }
 
@@ -140,6 +164,7 @@ func TestRepositoryDiscoverReturnsCanonicalRepositoryMetadata(t *testing.T) {
 	}
 	runGit(t, gitPath, repositoryRoot, "add", "README.md")
 	runGit(t, gitPath, repositoryRoot, "-c", "commit.gpgsign=false", "commit", "--no-gpg-sign", "-m", "initial")
+	runGit(t, gitPath, repositoryRoot, "remote", "add", "origin", "git@github.com:acme/repository.git")
 	nested := filepath.Join(repositoryRoot, "nested")
 	if err := os.Mkdir(nested, 0o700); err != nil {
 		t.Fatalf("create nested directory: %v", err)
@@ -170,6 +195,9 @@ func TestRepositoryDiscoverReturnsCanonicalRepositoryMetadata(t *testing.T) {
 	if len(result.Head) != 40 {
 		t.Fatalf("head = %q, want a full object id", result.Head)
 	}
+	if !reflect.DeepEqual(result.WebRemotes, []string{"https://github.com/acme/repository"}) {
+		t.Fatalf("web remotes = %#v, want sanitized origin", result.WebRemotes)
+	}
 	for _, path := range []string{result.CommonDir, result.GitDir} {
 		if !filepath.IsAbs(path) {
 			t.Fatalf("metadata path is not absolute: %q", path)
@@ -177,6 +205,39 @@ func TestRepositoryDiscoverReturnsCanonicalRepositoryMetadata(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("metadata path %q does not exist: %v", path, err)
 		}
+	}
+}
+
+func TestNormalizeWebRepositoryURLRejectsCredentialsAndUnsafeTransports(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+		ok    bool
+	}{
+		{input: "git@github.com:Acme/widgets.git", want: "https://github.com/Acme/widgets", ok: true},
+		{input: "ssh://git@gitlab.example.test:2222/platform/GitGit.git", ok: false},
+		{input: "ssh://git@ssh.github.com:443/acme/widgets.git", want: "https://github.com/acme/widgets", ok: true},
+		{input: "ssh://git@altssh.gitlab.com:443/acme/widgets.git", want: "https://gitlab.com/acme/widgets", ok: true},
+		{input: "git://github.com/acme/widgets.git", ok: false},
+		{input: "https://git.example.test:8443/acme/widgets.git", want: "https://git.example.test:8443/acme/widgets", ok: true},
+		{input: "https://git.example.test:443/acme/widgets.git", want: "https://git.example.test/acme/widgets", ok: true},
+		{input: "https://token@git.example.test/acme/widgets.git", ok: false},
+		{input: "http://git.example.test/acme/widgets.git", ok: false},
+		{input: "file:///tmp/repository", ok: false},
+		{input: "../repository", ok: false},
+		{input: `C:\repository`, ok: false},
+		{input: "C:/repository.git", ok: false},
+		{input: "git@evil).example:acme/repository.git", ok: false},
+		{input: "git@example.test:acme/repository.git?token=secret", ok: false},
+		{input: "git@example.test:acme/repository).git", ok: false},
+		{input: "git@example.test:acme/repository.GIT", ok: false},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			got, ok := normalizeWebRepositoryURL(test.input)
+			if ok != test.ok || got != test.want {
+				t.Fatalf("normalizeWebRepositoryURL(%q) = %q, %v; want %q, %v", test.input, got, ok, test.want, test.ok)
+			}
+		})
 	}
 }
 

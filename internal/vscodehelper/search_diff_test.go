@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -14,15 +15,17 @@ import (
 	"time"
 
 	"github.com/yunsang/gitgit/internal/app"
+	"github.com/yunsang/gitgit/internal/gitexec"
 )
 
 func TestSearchRunMatchesMessageDiffFileAndGroupedExpression(t *testing.T) {
 	fixture := newMethodFixture(t)
 	tests := []struct {
-		name        string
-		patterns    []map[string]any
-		wantMessage string
-		wantSources []string
+		name            string
+		patterns        []map[string]any
+		wantMessage     string
+		wantSources     []string
+		wantFileSources []string
 	}{
 		{
 			name:        "message",
@@ -31,16 +34,18 @@ func TestSearchRunMatchesMessageDiffFileAndGroupedExpression(t *testing.T) {
 			wantSources: []string{"msg"},
 		},
 		{
-			name:        "diff",
-			patterns:    []map[string]any{{"source": "diff", "value": "*third updated*"}},
-			wantMessage: "update new file",
-			wantSources: []string{"diff"},
+			name:            "diff",
+			patterns:        []map[string]any{{"source": "diff", "value": "*third updated*"}},
+			wantMessage:     "update new file",
+			wantSources:     []string{"diff"},
+			wantFileSources: []string{"diff"},
 		},
 		{
-			name:        "file",
-			patterns:    []map[string]any{{"source": "file", "value": "*new.txt*"}},
-			wantMessage: "update new file",
-			wantSources: []string{"file"},
+			name:            "file",
+			patterns:        []map[string]any{{"source": "file", "value": "*new.txt*"}},
+			wantMessage:     "update new file",
+			wantSources:     []string{"file"},
+			wantFileSources: []string{"file"},
 		},
 		{
 			name: "and or groups",
@@ -49,8 +54,9 @@ func TestSearchRunMatchesMessageDiffFileAndGroupedExpression(t *testing.T) {
 				{"source": "file", "value": "*new.txt*", "join": "or", "closeGroups": 1},
 				{"source": "diff", "value": "*third updated*", "join": "and"},
 			},
-			wantMessage: "update new file",
-			wantSources: []string{"file", "diff"},
+			wantMessage:     "update new file",
+			wantSources:     []string{"file", "diff"},
+			wantFileSources: []string{"file", "diff"},
 		},
 	}
 
@@ -77,12 +83,41 @@ func TestSearchRunMatchesMessageDiffFileAndGroupedExpression(t *testing.T) {
 			if match.Message != test.wantMessage || !reflect.DeepEqual(match.MatchSources, test.wantSources) {
 				t.Fatalf("match = %#v, want message %q sources %#v", match, test.wantMessage, test.wantSources)
 			}
-			if match.Commit == "" || match.ShortCommit != shortObjectID(match.Commit) || match.Author.Name == "" || match.Date == "" || match.File.Path == "" || match.Files == nil {
-				t.Fatalf("incomplete Desktop-shaped match: %#v", match)
+			if match.Commit == "" || match.ShortCommit != shortObjectID(match.Commit) || match.Author.Name == "" || match.Date == "" || match.ChangedFiles == nil || match.MatchedFiles == nil {
+				t.Fatalf("incomplete commit-first match: %#v", match)
+			}
+			if test.wantFileSources == nil {
+				if len(match.MatchedFiles) != 0 {
+					t.Fatalf("message-only match exposed matched files: %#v", match.MatchedFiles)
+				}
+			} else if len(match.MatchedFiles) != 1 || !reflect.DeepEqual(match.MatchedFiles[0].MatchSources, test.wantFileSources) {
+				t.Fatalf("matched files = %#v, want one file with sources %#v", match.MatchedFiles, test.wantFileSources)
 			}
 			assertTerminalProgress(t, progress, false)
 		})
 	}
+}
+
+func TestSearchRunLimitIsCommitBasedAndReportsHasMore(t *testing.T) {
+	fixture := newMethodFixture(t)
+	messages := serveRPCMessages(t, fixture.server, "search.run", map[string]any{
+		"repositoryRoot": fixture.root,
+		"patterns":       []map[string]any{{"source": "msg", "value": "*file*"}},
+		"limit":          1,
+	})
+	response, progress := splitRPCMessages(t, messages)
+	if response.Error != nil {
+		t.Fatalf("search.run error: %#v", response.Error)
+	}
+	var result SearchRunResult
+	decodeResult(t, response, &result)
+	if result.Count != 1 || len(result.Results) != 1 || !result.HasMore {
+		t.Fatalf("limited result = %#v, want one commit and hasMore", result)
+	}
+	if len(result.Results[0].MatchedFiles) != 0 || result.Results[0].ChangedFiles == nil {
+		t.Fatalf("message-only commit-first files = %#v", result.Results[0])
+	}
+	assertTerminalProgress(t, progress, false)
 }
 
 func TestSearchRunToleratesDesktopSnakeCaseAliasesAndEmitsCamelCase(t *testing.T) {
@@ -117,7 +152,7 @@ func TestSearchRunToleratesDesktopSnakeCaseAliasesAndEmitsCamelCase(t *testing.T
 	if err := json.Unmarshal(response.Result, &wire); err != nil {
 		t.Fatalf("decode search wire result: %v", err)
 	}
-	if wire["allRefs"] != true || wire["scope"] != "All refs" {
+	if _, ok := wire["hasMore"].(bool); !ok || wire["allRefs"] != true || wire["scope"] != "All refs" {
 		t.Fatalf("camelCase scope fields = %#v", wire)
 	}
 	if _, exists := wire["all_refs"]; exists {
@@ -134,7 +169,12 @@ func TestSearchRunToleratesDesktopSnakeCaseAliasesAndEmitsCamelCase(t *testing.T
 	if _, ok := match["matchSources"]; !ok {
 		t.Fatalf("matchSources missing: %#v", match)
 	}
-	for _, forbidden := range []string{"short_commit", "match_sources"} {
+	for _, required := range []string{"matchedFiles", "changedFiles"} {
+		if _, ok := match[required]; !ok {
+			t.Fatalf("%s missing: %#v", required, match)
+		}
+	}
+	for _, forbidden := range []string{"short_commit", "match_sources", "file", "files", "diff"} {
 		if _, exists := match[forbidden]; exists {
 			t.Fatalf("snake_case %q leaked into match: %#v", forbidden, match)
 		}
@@ -319,6 +359,306 @@ func TestDiffFileRootModificationDeletionRenameAndBinary(t *testing.T) {
 	}
 }
 
+func TestDiffFileDisablesConfiguredTextconv(t *testing.T) {
+	fixture := newDiffFixture(t)
+	writeFixtureFile(t, filepath.Join(fixture.root, ".gitattributes"), []byte("textconv.txt diff=gitgittextconv\n"))
+	writeFixtureFile(t, filepath.Join(fixture.root, "textconv.txt"), []byte("before textconv\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", ".gitattributes", "textconv.txt")
+	commitFixture(t, fixture.gitPath, fixture.root, "add textconv fixture")
+
+	runGit(t, fixture.gitPath, fixture.root, "config", "diff.gitgittextconv.textconv", "git gitgit-textconv-must-not-run")
+	writeFixtureFile(t, filepath.Join(fixture.root, "textconv.txt"), []byte("after textconv\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "textconv.txt")
+	commitFixture(t, fixture.gitPath, fixture.root, "update textconv fixture")
+	commit := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	response := serveRPC(t, fixture.server, "diff.file", map[string]any{
+		"repositoryRoot": fixture.root,
+		"commit":         commit,
+		"path":           "textconv.txt",
+	})
+	if response.Error != nil {
+		t.Fatalf("diff.file executed configured textconv: %#v", response.Error)
+	}
+	var result DiffFileResult
+	decodeResult(t, response, &result)
+	if !strings.Contains(result.Diff, "-before textconv") || !strings.Contains(result.Diff, "+after textconv") {
+		t.Fatalf("diff.file did not return the raw file diff:\n%s", result.Diff)
+	}
+}
+
+func TestDiffFileTreatsRenamePathsAsLiteralPathspecs(t *testing.T) {
+	fixture := newDiffFixture(t)
+	oldPath := "old[ab].txt"
+	newPath := "new[ab].txt"
+	writeFixtureFile(t, filepath.Join(fixture.root, oldPath), []byte("literal rename\n"))
+	writeFixtureFile(t, filepath.Join(fixture.root, "olda.txt"), []byte("old wildcard neighbor\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", oldPath, "olda.txt")
+	commitFixture(t, fixture.gitPath, fixture.root, "add literal pathspec fixture")
+
+	runGit(t, fixture.gitPath, fixture.root, "mv", oldPath, newPath)
+	writeFixtureFile(t, filepath.Join(fixture.root, "olda.txt"), []byte("changed old wildcard neighbor\n"))
+	writeFixtureFile(t, filepath.Join(fixture.root, "newa.txt"), []byte("new wildcard neighbor\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "olda.txt", "newa.txt")
+	commitFixture(t, fixture.gitPath, fixture.root, "rename literal pathspec fixture")
+	commit := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	response := serveRPC(t, fixture.server, "diff.file", map[string]any{
+		"repositoryRoot": fixture.root,
+		"commit":         commit,
+		"path":           newPath,
+		"oldPath":        oldPath,
+	})
+	if response.Error != nil {
+		t.Fatalf("diff.file error: %#v", response.Error)
+	}
+	var result DiffFileResult
+	decodeResult(t, response, &result)
+	if !strings.Contains(result.Diff, "rename from "+oldPath) || !strings.Contains(result.Diff, "rename to "+newPath) {
+		t.Fatalf("literal rename is missing from diff:\n%s", result.Diff)
+	}
+	if strings.Contains(result.Diff, "wildcard neighbor") || strings.Contains(result.Diff, "newa.txt") || strings.Contains(result.Diff, "olda.txt") {
+		t.Fatalf("wildcard pathspec leaked neighboring files into diff:\n%s", result.Diff)
+	}
+}
+
+func TestDiffFileDoesNotLeakDescendantsOfRenamedPath(t *testing.T) {
+	fixture := newDiffFixture(t)
+	writeFixtureFile(t, filepath.Join(fixture.root, "foo"), []byte("renamed content\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "foo")
+	commitFixture(t, fixture.gitPath, fixture.root, "add prefix fixture")
+
+	runGit(t, fixture.gitPath, fixture.root, "mv", "foo", "renamed-prefix-source")
+	if err := os.Mkdir(filepath.Join(fixture.root, "foo"), 0o700); err != nil {
+		t.Fatalf("create renamed prefix directory: %v", err)
+	}
+	runGit(t, fixture.gitPath, fixture.root, "mv", "renamed-prefix-source", "foo/bar")
+	writeFixtureFile(t, filepath.Join(fixture.root, "foo", "baz"), []byte("must not leak\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "foo/baz")
+	commitFixture(t, fixture.gitPath, fixture.root, "rename prefix fixture")
+	commit := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	response := serveRPC(t, fixture.server, "diff.file", map[string]any{
+		"repositoryRoot": fixture.root,
+		"commit":         commit,
+		"path":           "foo/bar",
+		"oldPath":        "foo",
+	})
+	if response.Error != nil {
+		t.Fatalf("diff.file error: %#v", response.Error)
+	}
+	var result DiffFileResult
+	decodeResult(t, response, &result)
+	if !strings.Contains(result.Diff, "rename from foo") || !strings.Contains(result.Diff, "rename to foo/bar") {
+		t.Fatalf("selected rename is missing from diff:\n%s", result.Diff)
+	}
+	if strings.Contains(result.Diff, "foo/baz") || strings.Contains(result.Diff, "must not leak") {
+		t.Fatalf("descendant-prefix path leaked into diff:\n%s", result.Diff)
+	}
+}
+
+func TestDiffFileReturnsDeletionWhenFileBecomesDirectory(t *testing.T) {
+	fixture := newDiffFixture(t)
+	writeFixtureFile(t, filepath.Join(fixture.root, "foo"), []byte("deleted preimage\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "foo")
+	commitFixture(t, fixture.gitPath, fixture.root, "add file directory fixture")
+	parent := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	runGit(t, fixture.gitPath, fixture.root, "rm", "foo")
+	if err := os.Mkdir(filepath.Join(fixture.root, "foo"), 0o700); err != nil {
+		t.Fatalf("create replacement directory: %v", err)
+	}
+	writeFixtureFile(t, filepath.Join(fixture.root, "foo", "bar"), []byte("replacement descendant\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "foo/bar")
+	commitFixture(t, fixture.gitPath, fixture.root, "replace file with directory")
+	commit := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	response := serveRPC(t, fixture.server, "diff.file", map[string]any{
+		"repositoryRoot": fixture.root,
+		"commit":         commit,
+		"path":           "foo",
+	})
+	if response.Error != nil {
+		t.Fatalf("diff.file error: %#v", response.Error)
+	}
+	var result DiffFileResult
+	decodeResult(t, response, &result)
+	if result.Parent != parent || !strings.Contains(result.Diff, "deleted file mode") || !strings.Contains(result.Diff, "-deleted preimage") {
+		t.Fatalf("file-to-directory deletion = %#v\n%s", result, result.Diff)
+	}
+	if strings.Contains(result.Diff, "foo/bar") || strings.Contains(result.Diff, "replacement descendant") {
+		t.Fatalf("replacement descendant leaked into deletion diff:\n%s", result.Diff)
+	}
+}
+
+func TestDiffFileReturnsFirstParentMergeChange(t *testing.T) {
+	fixture := newDiffFixture(t)
+	writeFixtureFile(t, filepath.Join(fixture.root, "merge.txt"), []byte("before merge\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "merge.txt")
+	commitFixture(t, fixture.gitPath, fixture.root, "add merge fixture")
+	mainBranch := gitOutput(t, fixture.gitPath, fixture.root, "branch", "--show-current")
+	runGit(t, fixture.gitPath, fixture.root, "branch", "merge-side")
+
+	writeFixtureFile(t, filepath.Join(fixture.root, "main-only.txt"), []byte("first parent\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "main-only.txt")
+	commitFixture(t, fixture.gitPath, fixture.root, "advance first parent")
+	firstParent := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	runGit(t, fixture.gitPath, fixture.root, "checkout", "merge-side")
+	writeFixtureFile(t, filepath.Join(fixture.root, "merge.txt"), []byte("after merge\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "merge.txt")
+	commitFixture(t, fixture.gitPath, fixture.root, "change merge fixture")
+	runGit(t, fixture.gitPath, fixture.root, "checkout", mainBranch)
+	runGit(t, fixture.gitPath, fixture.root, "-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-edit", "merge-side")
+	mergeCommit := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	response := serveRPC(t, fixture.server, "diff.file", map[string]any{
+		"repositoryRoot": fixture.root,
+		"commit":         mergeCommit,
+		"path":           "merge.txt",
+	})
+	if response.Error != nil {
+		t.Fatalf("diff.file merge error: %#v", response.Error)
+	}
+	var result DiffFileResult
+	decodeResult(t, response, &result)
+	if result.Parent != firstParent || !strings.Contains(result.Diff, "-before merge") || !strings.Contains(result.Diff, "+after merge") {
+		t.Fatalf("first-parent merge diff = %#v\n%s", result, result.Diff)
+	}
+}
+
+func TestMergeFileChangesExcludeSecondParentOnlyPaths(t *testing.T) {
+	fixture := newDiffFixture(t)
+	mainBranch := gitOutput(t, fixture.gitPath, fixture.root, "branch", "--show-current")
+	runGit(t, fixture.gitPath, fixture.root, "branch", "second-parent")
+
+	writeFixtureFile(t, filepath.Join(fixture.root, "second-parent-diff-only.txt"), []byte("second parent comparison only\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "second-parent-diff-only.txt")
+	commitFixture(t, fixture.gitPath, fixture.root, "advance first parent for isolation")
+	firstParent := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	runGit(t, fixture.gitPath, fixture.root, "checkout", "second-parent")
+	writeFixtureFile(t, filepath.Join(fixture.root, "first-parent-diff.txt"), []byte("first parent diff\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "first-parent-diff.txt")
+	commitFixture(t, fixture.gitPath, fixture.root, "add second parent only path")
+	runGit(t, fixture.gitPath, fixture.root, "checkout", mainBranch)
+	runGit(t, fixture.gitPath, fixture.root, "-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-edit", "second-parent")
+	mergeCommit := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	repository, openError := gitexec.OpenRepository(context.Background(), &gitexec.Runner{Binary: fixture.gitPath}, fixture.root)
+	if openError != nil {
+		t.Fatalf("open fixture repository: %v", openError)
+	}
+	filesByCommit, responseError := readCommitFilesBatch(context.Background(), repository, []string{mergeCommit})
+	if responseError != nil {
+		t.Fatalf("readCommitFilesBatch error: %#v", responseError)
+	}
+	changes := filesByCommit[mergeCommit]
+	if len(changes) != 1 || changes[0].Status != "A" || changes[0].Path != "first-parent-diff.txt" {
+		t.Fatalf("first-parent merge changes = %#v", changes)
+	}
+
+	response := serveRPC(t, fixture.server, "diff.file", map[string]any{
+		"repositoryRoot": fixture.root,
+		"commit":         mergeCommit,
+		"path":           "second-parent-diff-only.txt",
+	})
+	if response.Error == nil || response.Error.Data.Code != "diff_not_found" {
+		t.Fatalf("second-parent-only comparison leaked into diff.file: %#v", response.Error)
+	}
+	response = serveRPC(t, fixture.server, "diff.file", map[string]any{
+		"repositoryRoot": fixture.root,
+		"commit":         mergeCommit,
+		"path":           "first-parent-diff.txt",
+	})
+	if response.Error != nil {
+		t.Fatalf("first-parent merge addition error: %#v", response.Error)
+	}
+	var result DiffFileResult
+	decodeResult(t, response, &result)
+	if result.Parent != firstParent || !strings.Contains(result.Diff, "+first parent diff") {
+		t.Fatalf("first-parent merge addition = %#v\n%s", result, result.Diff)
+	}
+}
+
+func TestReadCommitFilesBatchIncludesRootChanges(t *testing.T) {
+	fixture := newDiffFixture(t)
+	repository, err := gitexec.OpenRepository(context.Background(), &gitexec.Runner{Binary: fixture.gitPath}, fixture.root)
+	if err != nil {
+		t.Fatalf("open fixture repository: %v", err)
+	}
+	filesByCommit, responseError := readCommitFilesBatch(context.Background(), repository, []string{fixture.rootCommit})
+	if responseError != nil {
+		t.Fatalf("readCommitFilesBatch root error: %#v", responseError)
+	}
+	changes := filesByCommit[fixture.rootCommit]
+	if len(changes) != 1 || changes[0].Status != "A" || changes[0].Path != "file.txt" {
+		t.Fatalf("root changes = %#v", changes)
+	}
+}
+
+func TestDiffFileReturnsBlobToGitlinkTypeChange(t *testing.T) {
+	fixture := newDiffFixture(t)
+	const path = "type-change.txt"
+	writeFixtureFile(t, filepath.Join(fixture.root, path), []byte("blob before gitlink\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", path)
+	commitFixture(t, fixture.gitPath, fixture.root, "add type change blob")
+	parent := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	runGit(t, fixture.gitPath, fixture.root, "rm", path)
+	runGit(
+		t,
+		fixture.gitPath,
+		fixture.root,
+		"update-index",
+		"--add",
+		"--cacheinfo",
+		"160000,"+parent+","+path,
+	)
+	commitFixture(t, fixture.gitPath, fixture.root, "replace blob with gitlink")
+	commit := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	response := serveRPC(t, fixture.server, "diff.file", map[string]any{
+		"repositoryRoot": fixture.root,
+		"commit":         commit,
+		"path":           path,
+	})
+	if response.Error != nil {
+		t.Fatalf("diff.file type change error: %#v", response.Error)
+	}
+	var result DiffFileResult
+	decodeResult(t, response, &result)
+	if result.Parent != parent {
+		t.Fatalf("type change parent = %q, want %q", result.Parent, parent)
+	}
+	if strings.Count(result.Diff, "diff --git a/"+path+" b/"+path) != 2 ||
+		!strings.Contains(result.Diff, "deleted file mode 100644") ||
+		!strings.Contains(result.Diff, "new file mode 160000") ||
+		!strings.Contains(result.Diff, "-blob before gitlink") ||
+		!strings.Contains(result.Diff, "+Subproject commit "+parent) {
+		t.Fatalf("blob-to-gitlink diff is incomplete:\n%s", result.Diff)
+	}
+}
+
+func TestSelectExactFileDiffRejectsMalformedRawPatchOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		output []byte
+	}{
+		{name: "missing boundary", output: []byte(":100644 100644 old new M\x00file.txt\x00")},
+		{name: "malformed raw", output: []byte("invalid\x00path\x00\x00diff --git a/path b/path\n")},
+		{name: "patch count mismatch", output: []byte(":100644 100644 old new M\x00file.txt\x00\x00")},
+	}
+	selected := FileChange{Status: "M", Path: "file.txt"}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := selectExactFileDiff(test.output, selected); err == nil {
+				t.Fatal("selectExactFileDiff accepted malformed Git output")
+			}
+		})
+	}
+}
+
 func TestDiffFileRejectsInjectionEscapeMissingAndOversizedOutput(t *testing.T) {
 	fixture := newDiffFixture(t)
 	tests := []struct {
@@ -476,6 +816,7 @@ func assertTerminalProgress(t *testing.T, progress []decodedMessage, cancelled b
 
 type diffFixture struct {
 	root         string
+	gitPath      string
 	server       *Server
 	rootCommit   string
 	modifyCommit string
@@ -535,6 +876,7 @@ func newDiffFixture(t *testing.T) diffFixture {
 	})
 	return diffFixture{
 		root:         canonicalPath(root),
+		gitPath:      gitPath,
 		server:       server,
 		rootCommit:   rootCommit,
 		modifyCommit: modifyCommit,

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -363,14 +365,164 @@ func (s *Server) discoverRepository(ctx context.Context, rawParams json.RawMessa
 	} else if ctx.Err() != nil {
 		return RepositoryDiscoverResult{}, cancelledError()
 	}
+	webRemotes, remoteError := repositoryWebRemotes(ctx, repository)
+	if remoteError != nil {
+		return RepositoryDiscoverResult{}, remoteError
+	}
 
 	return RepositoryDiscoverResult{
-		Root:      canonicalPath(repository.Root),
-		CommonDir: canonicalPath(repository.CommonDir),
-		GitDir:    gitDir,
-		Branch:    branch,
-		Head:      head,
+		Root:       canonicalPath(repository.Root),
+		CommonDir:  canonicalPath(repository.CommonDir),
+		GitDir:     gitDir,
+		Branch:     branch,
+		Head:       head,
+		WebRemotes: webRemotes,
 	}, nil
+}
+
+func repositoryWebRemotes(
+	ctx context.Context,
+	repository *gitexec.Repository,
+) ([]string, *RPCError) {
+	remoteOutput, remoteError := runReadOnlyGit(ctx, repository, nil, "remote")
+	if remoteError != nil {
+		if ctx.Err() != nil {
+			return nil, cancelledError()
+		}
+		return nil, nil
+	}
+
+	webRemotes := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, name := range strings.Fields(string(remoteOutput)) {
+		output, err := runReadOnlyGit(ctx, repository, nil, "remote", "get-url", "--all", name)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, cancelledError()
+			}
+			continue
+		}
+		for _, remoteURL := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+			webURL, ok := normalizeWebRepositoryURL(remoteURL)
+			if !ok || seen[webURL] {
+				continue
+			}
+			seen[webURL] = true
+			webRemotes = append(webRemotes, webURL)
+		}
+	}
+	return webRemotes, nil
+}
+
+func normalizeWebRepositoryURL(remoteURL string) (string, bool) {
+	value := strings.TrimSpace(remoteURL)
+	if value == "" || strings.ContainsAny(value, "\r\n\t ") {
+		return "", false
+	}
+	if !strings.Contains(value, "://") {
+		left, repositoryPath, ok := strings.Cut(value, ":")
+		windowsDrive := len(left) == 1 && ((left[0] >= 'a' && left[0] <= 'z') || (left[0] >= 'A' && left[0] <= 'Z'))
+		if !ok || windowsDrive || strings.ContainsAny(left, "/\\") || strings.Contains(repositoryPath, "\\") {
+			return "", false
+		}
+		host := left
+		if _, suffix, found := strings.Cut(left, "@"); found {
+			host = suffix
+		}
+		webHost, ok := sshWebHost(host)
+		if !ok {
+			return "", false
+		}
+		return buildWebRepositoryURL(webHost, repositoryPath)
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Hostname() == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
+	}
+	if (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.User != nil {
+		return "", false
+	}
+	switch parsed.Scheme {
+	case "https":
+		host := parsed.Host
+		if parsed.Port() == "443" {
+			host = parsed.Hostname()
+		}
+		return buildWebRepositoryURL(host, parsed.Path)
+	case "ssh":
+		webHost, ok := sshWebHost(parsed.Hostname())
+		if !ok {
+			return "", false
+		}
+		return buildWebRepositoryURL(webHost, parsed.Path)
+	default:
+		return "", false
+	}
+}
+
+func sshWebHost(host string) (string, bool) {
+	switch strings.ToLower(host) {
+	case "github.com", "ssh.github.com":
+		return "github.com", true
+	case "gitlab.com", "altssh.gitlab.com":
+		return "gitlab.com", true
+	default:
+		return "", false
+	}
+}
+
+func buildWebRepositoryURL(host, repositoryPath string) (string, bool) {
+	host = strings.ToLower(strings.TrimSpace(host))
+	repositoryPath = strings.Trim(strings.TrimSpace(repositoryPath), "/")
+	if len(repositoryPath) >= 4 && strings.EqualFold(repositoryPath[len(repositoryPath)-4:], ".git") {
+		repositoryPath = repositoryPath[:len(repositoryPath)-4]
+	}
+	if host == "" || repositoryPath == "" ||
+		strings.ContainsAny(host, "@/\\?#") ||
+		strings.ContainsAny(repositoryPath, "\\?#()[]<>\"'") {
+		return "", false
+	}
+	if !validWebHost(host) {
+		return "", false
+	}
+	for _, part := range strings.Split(repositoryPath, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", false
+		}
+	}
+	return (&url.URL{Scheme: "https", Host: host, Path: "/" + repositoryPath}).String(), true
+}
+
+func validWebHost(host string) bool {
+	hostname := host
+	if strings.Contains(host, ":") {
+		var port string
+		var err error
+		hostname, port, err = net.SplitHostPort(host)
+		if err != nil {
+			return false
+		}
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			return false
+		}
+	}
+	for _, label := range strings.Split(hostname, ".") {
+		if label == "" || !asciiLetterOrDigit(label[0]) || !asciiLetterOrDigit(label[len(label)-1]) {
+			return false
+		}
+		for index := 1; index < len(label)-1; index++ {
+			if !asciiLetterOrDigit(label[index]) && label[index] != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func asciiLetterOrDigit(value byte) bool {
+	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9')
 }
 
 func canonicalPath(path string) string {

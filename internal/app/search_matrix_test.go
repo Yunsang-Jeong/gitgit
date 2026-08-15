@@ -67,6 +67,8 @@ func TestSearchRandomizedHistoryMatrix(t *testing.T) {
 		wantCount   int
 		wantPaths   []string
 		wantSources []string
+		wantMatched int
+		wantChanged int
 	}{
 		{
 			name:      "message glob",
@@ -134,9 +136,10 @@ func TestSearchRandomizedHistoryMatrix(t *testing.T) {
 			wantCount: 1, wantPaths: []string{sidePath}, wantSources: []string{"msg", "diff"},
 		},
 		{
-			name:      "limit stops within multi-file commit",
+			name:      "multi-file commit aggregates once",
 			options:   withLimit(searchOptions("*"+bulkToken+"*", "all"), 3),
-			wantCount: 3, wantPaths: bulkPaths[:3], wantSources: []string{"msg", "diff"},
+			wantCount: 1, wantPaths: bulkPaths[:1], wantSources: []string{"msg", "diff"},
+			wantMatched: 5, wantChanged: 5,
 		},
 	}
 
@@ -154,6 +157,12 @@ func TestSearchRandomizedHistoryMatrix(t *testing.T) {
 				gotPaths = append(gotPaths, result.File.Path)
 				if test.wantSources != nil && !slices.Equal(result.MatchSources, test.wantSources) {
 					t.Errorf("sources for %s = %v, want %v", result.File.Path, result.MatchSources, test.wantSources)
+				}
+				if test.wantMatched > 0 && len(result.MatchedFiles) != test.wantMatched {
+					t.Errorf("matched files = %d, want %d: %#v", len(result.MatchedFiles), test.wantMatched, result.MatchedFiles)
+				}
+				if test.wantChanged > 0 && len(result.ChangedFiles) != test.wantChanged {
+					t.Errorf("changed files = %d, want %d: %#v", len(result.ChangedFiles), test.wantChanged, result.ChangedFiles)
 				}
 			}
 			slices.Sort(gotPaths)

@@ -21,13 +21,108 @@ export interface DeletionAnchor {
 
 export interface HistorySelectionCommit {
   commit: string
-  files: Array<{ path: string, oldPath?: string }>
+  files: Array<{ status?: string, path: string, oldPath?: string }>
 }
 
 export interface HistorySelection {
   commit: string
   path: string
   oldPath?: string
+  status?: string
+}
+
+export type BlameMode = 'auto' | 'off' | 'activeLine' | 'visibleLines'
+
+export function resolveBlameMode(configuredMode: BlameMode, nativeBlameEnabled: boolean): Exclude<BlameMode, 'auto'> {
+  if (configuredMode !== 'auto') return configuredMode
+  return nativeBlameEnabled ? 'off' : 'activeLine'
+}
+
+export function blameAnnotation(commit: string, author: string, authoredAt: string, now = new Date()): string {
+  if (isWorkingTreeCommit(commit)) return '  │ GitGit · Working tree'
+  const relativeTime = compactRelativeTime(authoredAt, now)
+  return `  │ GitGit · ${author}${relativeTime ? ` · ${relativeTime}` : ''}`
+}
+
+export function isWorkingTreeCommit(commit: string): boolean {
+  return /^(?:0{40}|0{64})$/u.test(commit)
+}
+
+export function compactRelativeTime(value: string, now = new Date()): string {
+  const relative = relativeTimeParts(value, now)
+  if (!relative) return ''
+  if (relative.unit === 'now') return 'now'
+  const label = `${relative.value}${relative.unit}`
+  return relative.future ? `in ${label}` : label
+}
+
+export function relativeTimeDescription(value: string, now = new Date()): string {
+  const relative = relativeTimeParts(value, now)
+  if (!relative) return ''
+  if (relative.unit === 'now') return 'just now'
+  const names = { m: 'minute', h: 'hour', d: 'day', mo: 'month', y: 'year' } as const
+  const unit = names[relative.unit]
+  const quantity = `${relative.value} ${unit}${relative.value === 1 ? '' : 's'}`
+  return relative.future ? `${quantity} from now` : `${quantity} ago`
+}
+
+export function fileHistoryDescription(
+  shortCommit: string,
+  author: string,
+  authoredAt: string,
+  now = new Date(),
+): string {
+  const relativeTime = compactRelativeTime(authoredAt, now)
+  return [author, relativeTime, shortCommit].filter(Boolean).join(' · ')
+}
+
+export function fileHistoryAccessibilityLabel(
+  subject: string,
+  shortCommit: string,
+  author: string,
+  authoredAt: string,
+  now = new Date(),
+): string {
+  const relativeTime = relativeTimeDescription(authoredAt, now)
+  return [
+    `Commit ${subject || shortCommit}`,
+    `Authored by ${author}${relativeTime ? ` ${relativeTime}` : ''}`,
+    `Commit ID ${shortCommit}`,
+    'Open read-only revision',
+  ].join('. ')
+}
+
+type RelativeTimeUnit = 'now' | 'm' | 'h' | 'd' | 'mo' | 'y'
+
+interface RelativeTimeParts {
+  value: number
+  unit: RelativeTimeUnit
+  future: boolean
+}
+
+function relativeTimeParts(value: string, now: Date): RelativeTimeParts | undefined {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime()) || Number.isNaN(now.getTime())) return undefined
+
+  const seconds = Math.trunc((now.getTime() - date.getTime()) / 1_000)
+  const future = seconds < 0
+  const distance = Math.abs(seconds)
+  if (distance < 60) return { value: 0, unit: 'now', future }
+
+  const units: Array<{ unit: Exclude<RelativeTimeUnit, 'now'>, seconds: number }> = [
+    { unit: 'y', seconds: 365 * 24 * 60 * 60 },
+    { unit: 'mo', seconds: 30 * 24 * 60 * 60 },
+    { unit: 'd', seconds: 24 * 60 * 60 },
+    { unit: 'h', seconds: 60 * 60 },
+    { unit: 'm', seconds: 60 },
+  ]
+  const selected = units.find((candidate) => distance >= candidate.seconds) ?? units.at(-1)
+  if (!selected) return undefined
+  return {
+    value: Math.max(1, Math.floor(distance / selected.seconds)),
+    unit: selected.unit,
+    future,
+  }
 }
 
 export function visibleBlameWindow(
@@ -108,6 +203,7 @@ export function traceFileHistorySelections(
       commit: commit.commit,
       path: changedFile?.path ?? tracedPath,
       ...(changedFile?.oldPath ? { oldPath: changedFile.oldPath } : {}),
+      ...(changedFile?.status ? { status: changedFile.status } : {}),
     }
     if (changedFile?.path === tracedPath && changedFile.oldPath) tracedPath = changedFile.oldPath
     return selection

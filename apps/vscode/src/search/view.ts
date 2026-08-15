@@ -1,7 +1,8 @@
-import { randomBytes } from 'node:crypto'
+import * as path from 'node:path'
 
 import * as vscode from 'vscode'
 
+import type { SearchRequest, SearchResponse } from '../helper/protocol.js'
 import {
   buildSearchRequest,
   initialSearchState,
@@ -10,15 +11,16 @@ import {
   type SearchDraft,
   type SearchViewState,
 } from './model.js'
-import type { SearchRequest, SearchResponse, SearchResult } from '../helper/protocol.js'
 import {
-  contentSecurityPolicy,
-  escapeHtml,
-  parseWebviewMessage,
-  type SearchResultSelection,
-} from './webview.js'
-
-export type { SearchResultSelection } from './webview.js'
+  searchFilterSummary,
+  searchFileSelection,
+  searchStatusMessage,
+  searchTree,
+  type SearchCommitNode,
+  type SearchFileNode,
+  type SearchGroupNode,
+  type SearchTreeNode,
+} from './tree-model.js'
 
 export interface SearchRuntime {
   readonly state: {
@@ -34,100 +36,235 @@ export interface SearchRuntime {
   ): Promise<SearchResponse>
 }
 
+type SearchFilter = 'scope' | 'engine' | 'author' | 'since' | 'until' | 'followRename' | 'clear'
 
-export class SearchViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
-  private view: vscode.WebviewView | undefined
+interface SearchFilterItem extends vscode.QuickPickItem {
+  id: SearchFilter
+}
+
+interface SearchKindItem extends vscode.QuickPickItem {
+  prefix: string
+}
+
+export class SearchViewProvider implements vscode.TreeDataProvider<SearchTreeNode>, vscode.Disposable {
+  private view: vscode.TreeView<SearchTreeNode> | undefined
   private searchState: SearchViewState = initialSearchState()
   private cancellation: vscode.CancellationTokenSource | undefined
   private nextRequestId = 1
   private repositoryRoot: string | undefined
+  private nodes: SearchCommitNode[] = []
   private readonly subscriptions: vscode.Disposable[] = []
-  private readonly selected = new vscode.EventEmitter<SearchResultSelection>()
-  readonly onDidSelectResult = this.selected.event
+  private readonly changed = new vscode.EventEmitter<SearchTreeNode | undefined>()
+  readonly onDidChangeTreeData = this.changed.event
 
   constructor(private readonly runtime: SearchRuntime) {
     this.repositoryRoot = runtime.state.repository?.root
     this.subscriptions.push(runtime.onDidChange(() => this.runtimeChanged()))
   }
 
-  resolveWebviewView(view: vscode.WebviewView): void {
+  attachView(view: vscode.TreeView<SearchTreeNode>): void {
     this.view = view
-    view.webview.options = { enableScripts: true }
-    const messages = view.webview.onDidReceiveMessage((raw) => this.onMessage(raw))
-    view.onDidDispose(() => {
-      messages.dispose()
-      this.cancelActiveSearch()
-      if (this.view === view) this.view = undefined
+    this.updateView()
+  }
+
+  getTreeItem(element: SearchTreeNode): vscode.TreeItem {
+    switch (element.kind) {
+      case 'commit':
+        return commitTreeItem(element)
+      case 'group':
+        return groupTreeItem(element)
+      case 'file':
+        return fileTreeItem(element)
+    }
+  }
+
+  getChildren(element?: SearchTreeNode): SearchTreeNode[] {
+    if (!element) return this.nodes
+    return element.kind === 'file' ? [] : element.children
+  }
+
+  async promptAndSearch(): Promise<void> {
+    let value = this.searchState.draft.expression
+    if (!value.trim()) {
+      const kind = await vscode.window.showQuickPick<SearchKindItem>([
+        { label: '$(comment-discussion) Message', description: 'Search commit messages', prefix: 'MSG: ' },
+        { label: '$(diff) Diff', description: 'Search added and removed lines', prefix: 'DIFF: ' },
+        { label: '$(file) File path', description: 'Search changed paths', prefix: 'FILE: ' },
+        { label: '$(symbol-operator) Advanced expression', description: 'Combine MSG:, DIFF:, and FILE:', prefix: '' },
+      ], {
+        title: 'GitGit Search',
+        placeHolder: 'Choose what to search',
+      })
+      if (!kind) return
+      value = kind.prefix
+    }
+
+    const draft = this.searchState.draft
+    const expression = await vscode.window.showInputBox({
+      title: 'GitGit Search',
+      prompt: `Search commit history · ${searchFilterSummary(draft)}`,
+      placeHolder: 'MSG: *cache* OR FILE: **/*.go',
+      value,
+      valueSelection: [value.length, value.length],
+      validateInput: (candidate) => validateSearchDraft({ ...draft, expression: candidate }).error || undefined,
     })
-    this.render()
+    if (expression === undefined) return
+    await this.search({ ...draft, expression })
+  }
+
+  async configureFilters(): Promise<void> {
+    const draft = this.searchState.draft
+    const selected = await vscode.window.showQuickPick<SearchFilterItem>([
+      { id: 'scope', label: '$(git-branch) Scope', description: draft.allRefs ? 'All refs' : 'HEAD' },
+      { id: 'engine', label: '$(regex) Matching', description: draft.engine === 'regex' ? 'Regex' : 'Glob' },
+      { id: 'author', label: '$(account) Author', description: draft.author.trim() || 'Any author' },
+      { id: 'since', label: '$(calendar) Since', description: draft.since.trim() || 'No lower date bound' },
+      { id: 'until', label: '$(calendar) Until', description: draft.until.trim() || 'No upper date bound' },
+      {
+        id: 'followRename',
+        label: '$(references) Follow renames',
+        description: draft.followRename ? 'Enabled' : 'Disabled',
+      },
+      { id: 'clear', label: '$(clear-all) Clear filters', description: 'Restore HEAD and Glob defaults' },
+    ], {
+      title: 'GitGit Search Filters',
+      placeHolder: searchFilterSummary(draft),
+      matchOnDescription: true,
+    })
+    if (!selected) return
+
+    let next: SearchDraft | undefined
+    switch (selected.id) {
+      case 'scope': {
+        const scope = await vscode.window.showQuickPick([
+          { label: 'HEAD', description: 'Search the current history scope', allRefs: false },
+          { label: 'All refs', description: 'Include branches and tags', allRefs: true },
+        ], { title: 'GitGit Search Scope' })
+        if (scope) next = { ...draft, allRefs: scope.allRefs }
+        break
+      }
+      case 'engine': {
+        const engine = await vscode.window.showQuickPick([
+          { label: 'Glob', description: 'Wildcard matching', engine: 'glob' as const },
+          { label: 'Regex', description: 'Regular expression matching', engine: 'regex' as const },
+        ], { title: 'GitGit Search Matching' })
+        if (engine) next = { ...draft, engine: engine.engine }
+        break
+      }
+      case 'author': {
+        const author = await filterInput('Author', 'Name or email', draft.author)
+        if (author !== undefined) next = { ...draft, author }
+        break
+      }
+      case 'since': {
+        const since = await filterInput('Since', 'last:30d or 2026. 08. 15.', draft.since)
+        if (since !== undefined) next = { ...draft, since }
+        break
+      }
+      case 'until': {
+        const until = await filterInput('Until', '2026. 08. 15.', draft.until)
+        if (until !== undefined) next = { ...draft, until }
+        break
+      }
+      case 'followRename': {
+        const follow = await vscode.window.showQuickPick([
+          { label: 'Disabled', description: 'Match the path at each commit', enabled: false },
+          { label: 'Enabled', description: 'Trace matching FILE: paths across renames', enabled: true },
+        ], { title: 'Follow Renames' })
+        if (follow) next = { ...draft, followRename: follow.enabled }
+        break
+      }
+      case 'clear':
+        next = {
+          ...draft,
+          engine: 'glob',
+          allRefs: false,
+          author: '',
+          since: '',
+          until: '',
+          followRename: false,
+        }
+        break
+    }
+    if (next) this.edit(next)
+  }
+
+  async rerun(): Promise<void> {
+    if (!this.searchState.draft.expression.trim()) {
+      await this.promptAndSearch()
+      return
+    }
+    await this.search(this.searchState.draft)
+  }
+
+  cancel(): void {
+    const requestId = this.searchState.activeRequestId
+    if (requestId === undefined) return
+    this.cancellation?.cancel()
+    this.cancellation?.dispose()
+    this.cancellation = undefined
+    this.searchState = reduceSearchState(this.searchState, { type: 'cancel', requestId })
+    this.updateView()
+  }
+
+  clear(): void {
+    const draft = this.searchState.draft
+    this.cancelActiveSearch()
+    this.searchState = { ...initialSearchState(), draft }
+    this.nodes = []
+    this.changed.fire(undefined)
+    this.updateView()
   }
 
   dispose(): void {
-    this.cancellation?.cancel()
-    this.cancellation?.dispose()
-    this.selected.dispose()
+    this.cancelActiveSearch()
+    this.changed.dispose()
     for (const subscription of this.subscriptions) subscription.dispose()
   }
 
-  private async onMessage(raw: unknown): Promise<void> {
-    const message = parseWebviewMessage(raw)
-    if (!message) return
-    if ('action' in message) {
-      this.selected.fire(message)
-      return
-    }
-    if (message.type === 'draftChanged') {
-      this.searchState = reduceSearchState(this.searchState, { type: 'edit', draft: message.draft })
-      this.postState()
-      return
-    }
-    if (message.type === 'cancel') {
-      const requestId = this.searchState.activeRequestId
-      if (requestId === undefined) return
-      this.cancellation?.cancel()
-      this.cancellation?.dispose()
-      this.cancellation = undefined
-      this.searchState = reduceSearchState(this.searchState, { type: 'cancel', requestId })
-      this.render()
-      return
-    }
-    await this.search(message.draft)
+  private edit(draft: SearchDraft): void {
+    this.searchState = reduceSearchState(this.searchState, { type: 'edit', draft })
+    this.updateView()
   }
 
   private async search(draft: SearchDraft): Promise<void> {
+    // A new attempt supersedes the previous request even when the replacement
+    // draft or runtime is invalid. Clear the active request first so a late
+    // response cannot settle into the replacement attempt.
+    this.cancelActiveSearch()
     const validated = validateSearchDraft(draft)
-    this.searchState = reduceSearchState(this.searchState, { type: 'edit', draft })
+    this.edit(draft)
     if (validated.error) {
       this.searchState = { ...this.searchState, error: validated.error, phase: 'error' }
-      this.render()
+      this.updateView()
       return
     }
     const repository = this.runtime.state.repository
     if (!repository || this.runtime.state.phase !== 'ready') {
       this.searchState = { ...this.searchState, error: this.runtime.state.message, phase: 'error' }
-      this.render()
+      this.updateView()
       return
     }
 
-    this.cancellation?.cancel()
-    this.cancellation?.dispose()
     const cancellation = new vscode.CancellationTokenSource()
     this.cancellation = cancellation
     const requestId = this.nextRequestId++
     const request = buildSearchRequest(repository.root, requestId, draft, validated.patterns)
     this.searchState = reduceSearchState(this.searchState, { type: 'start', requestId, draft })
-    this.render()
+    this.updateView()
 
     try {
       const response = await this.runtime.runSearch(
         request,
         (progress) => {
           this.searchState = reduceSearchState(this.searchState, { type: 'progress', progress })
-          this.postState()
+          this.updateView()
         },
         cancellation.token,
       )
       this.searchState = reduceSearchState(this.searchState, { type: 'success', requestId, draft, response })
+      this.nodes = searchTree(this.searchState.results)
+      this.changed.fire(undefined)
     } catch (error) {
       if (!cancellation.token.isCancellationRequested) {
         const message = error instanceof Error ? error.message : String(error)
@@ -138,30 +275,8 @@ export class SearchViewProvider implements vscode.WebviewViewProvider, vscode.Di
         cancellation.dispose()
         this.cancellation = undefined
       }
-      this.render()
+      this.updateView()
     }
-  }
-
-  private render(): void {
-    if (!this.view) return
-    const nonce = nonceValue()
-    this.view.webview.html = searchHtml(this.runtime.state, this.searchState, nonce)
-  }
-
-  private postState(): void {
-    if (!this.view) return
-    const validated = validateSearchDraft(this.searchState.draft)
-    const status = this.runtime.state.phase === 'ready'
-      ? this.searchState.error || validated.error || this.searchState.notice || searchStatus(this.searchState)
-      : this.runtime.state.message
-    void this.view.webview.postMessage({
-      type: 'searchState',
-      status,
-      searchDisabled: this.runtime.state.phase !== 'ready'
-        || this.searchState.phase === 'running'
-        || Boolean(validated.error),
-      cancelDisabled: this.searchState.phase !== 'running',
-    })
   }
 
   private runtimeChanged(): void {
@@ -170,14 +285,18 @@ export class SearchViewProvider implements vscode.WebviewViewProvider, vscode.Di
       const draft = this.searchState.draft
       this.cancelActiveSearch()
       this.searchState = { ...initialSearchState(), draft }
+      this.nodes = []
+      this.changed.fire(undefined)
     } else if (this.runtime.state.phase !== 'ready' && this.runtime.state.phase !== 'loading') {
       const draft = this.searchState.draft
       this.cancelActiveSearch()
       this.searchState = { ...initialSearchState(), draft }
       this.repositoryRoot = undefined
+      this.nodes = []
+      this.changed.fire(undefined)
     }
     if (nextRoot) this.repositoryRoot = nextRoot
-    this.render()
+    this.updateView()
   }
 
   private cancelActiveSearch(): void {
@@ -189,58 +308,95 @@ export class SearchViewProvider implements vscode.WebviewViewProvider, vscode.Di
       this.searchState = reduceSearchState(this.searchState, { type: 'cancel', requestId })
     }
   }
-}
 
-function nonceValue(): string {
-  return randomBytes(24).toString('hex')
-}
-
-export function searchHtml(runtime: SearchRuntime['state'], state: SearchViewState, nonce: string): string {
-  const validated = validateSearchDraft(state.draft)
-  const disabled = runtime.phase !== 'ready' || state.phase === 'running' || Boolean(validated.error)
-  const status = runtime.phase === 'ready'
-    ? state.error || validated.error || state.notice || searchStatus(state)
-    : runtime.message
-  const results = groupResults(state.results).map(renderResult).join('')
-    || '<p class="empty">No successful Search results yet.</p>'
-  const initial = JSON.stringify(state.draft).replaceAll('<', '\\u003c')
-  const policy = contentSecurityPolicy(nonce)
-
-  return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}">
-<style nonce="${nonce}">:root{color-scheme:light dark}body{box-sizing:border-box;padding:0 12px 16px;color:var(--vscode-foreground);font-family:var(--vscode-font-family);font-size:var(--vscode-font-size)}*,*:before,*:after{box-sizing:inherit}.section{margin:14px 0 6px;font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--vscode-descriptionForeground)}input,select,button{font:inherit;color:var(--vscode-input-foreground);background:var(--vscode-input-background);border:1px solid var(--vscode-input-border,transparent);min-height:28px}input,select{width:100%;padding:4px 7px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}.wide{grid-column:1/-1}.checks{display:flex;flex-wrap:wrap;gap:10px;margin:7px 0}.checks label{display:flex;gap:5px;align-items:center}.checks input{width:auto;min-height:auto}.actions{display:flex;gap:6px;margin-top:8px}.actions button{padding:4px 10px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:0}.actions button:hover{background:var(--vscode-button-hoverBackground)}.actions button:disabled{opacity:.55}.actions .secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}.status{min-height:34px;margin:8px 0;padding:7px;border-left:2px solid var(--vscode-focusBorder);color:var(--vscode-descriptionForeground);word-break:break-word}.repo{word-break:break-all;color:var(--vscode-descriptionForeground)}.result{padding:9px 0;border-top:1px solid var(--vscode-panel-border)}.headline{display:flex;gap:6px;align-items:center}.commit{font-family:var(--vscode-editor-font-family);color:var(--vscode-textLink-foreground)}.message{font-weight:600;overflow-wrap:anywhere}.meta,.files{margin-top:3px;color:var(--vscode-descriptionForeground);font-size:12px}.badges{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}.badge{padding:1px 5px;border:1px solid var(--vscode-badge-background);border-radius:7px}.file{display:flex;gap:5px;align-items:center;margin-top:5px}.file span{flex:1;overflow-wrap:anywhere}.file button{min-height:22px;padding:1px 5px;background:transparent;color:var(--vscode-textLink-foreground);border-color:var(--vscode-textLink-foreground)}.empty{color:var(--vscode-descriptionForeground)}</style></head><body>
-<div class="section">PRESET</div><p class="repo">${escapeHtml(runtime.repository?.root ?? runtime.message)}</p>
-<div class="section">FILTERS</div><div class="grid"><label class="wide">Engine<select id="engine"><option value="glob">Glob</option><option value="regex">Regex</option></select></label><label>Author<input id="author" autocomplete="off"></label><label>Since<input id="since" autocomplete="off" placeholder="last:30d"></label><label>Until<input id="until" autocomplete="off"></label></div><div class="checks"><label><input id="allRefs" type="checkbox">All refs</label><label><input id="followRename" type="checkbox">Follow renames</label></div>
-<div class="section">SEARCH</div><label>Expression<input id="expression" autocomplete="off" spellcheck="false" placeholder="MSG: *cache* OR FILE: **/*.go"></label><div class="actions"><button id="search" ${disabled ? 'disabled' : ''}>Search</button><button id="cancel" class="secondary" ${state.phase === 'running' ? '' : 'disabled'}>Cancel</button></div><div id="status" class="status" role="status" aria-live="polite">${escapeHtml(status)}</div><div aria-label="Search results">${results}</div>
-<script nonce="${nonce}">const vscode=acquireVsCodeApi();const initial=${initial};const ids=['expression','engine','author','since','until','allRefs','followRename'];for(const id of ids){const el=document.getElementById(id);el[id==='allRefs'||id==='followRename'?'checked':'value']=initial[id]??false;el.addEventListener('input',()=>{document.getElementById('status').textContent='Validating filters…';vscode.postMessage({type:'draftChanged',draft:readDraft()});});}function readDraft(){return {expression:document.getElementById('expression').value,engine:document.getElementById('engine').value,author:document.getElementById('author').value,since:document.getElementById('since').value,until:document.getElementById('until').value,allRefs:document.getElementById('allRefs').checked,followRename:document.getElementById('followRename').checked};}window.addEventListener('message',(event)=>{const state=event.data;if(!state||state.type!=='searchState')return;document.getElementById('status').textContent=state.status;document.getElementById('search').disabled=state.searchDisabled;document.getElementById('cancel').disabled=state.cancelDisabled;});document.getElementById('search').addEventListener('click',()=>vscode.postMessage({type:'search',draft:readDraft()}));document.getElementById('cancel').addEventListener('click',()=>vscode.postMessage({type:'cancel'}));document.addEventListener('click',(event)=>{const target=event.target;if(!(target instanceof Element))return;const button=target.closest('button[data-action]');if(!button)return;vscode.postMessage({type:button.dataset.action,commit:button.dataset.commit,path:button.dataset.path,oldPath:button.dataset.oldPath||undefined});});</script></body></html>`
-}
-
-function searchStatus(state: SearchViewState): string {
-  if (state.phase === 'running') return state.progress
-    ? `Searching ${state.progress.scanned} / ${state.progress.total} commits…`
-    : 'Starting Search…'
-  if (state.phase === 'ready') return `${state.results.length} file matches · ${state.scanned} commits scanned.`
-  if (state.phase === 'stale') return 'Expression changed. Run Search to refresh these results.'
-  return 'Enter MSG:, DIFF:, or FILE: conditions, then choose Search.'
-}
-
-function groupResults(results: SearchResult[]): SearchResult[] {
-  const grouped = new Map<string, SearchResult>()
-  for (const result of results) {
-    const current = grouped.get(result.commit)
-    if (!current) {
-      grouped.set(result.commit, { ...result, refs: [...result.refs], files: [...result.files], matchSources: [...result.matchSources] })
-      continue
+  private updateView(): void {
+    const view = this.view
+    const repository = this.runtime.state.repository
+    if (view) {
+      view.description = repository
+        ? `${path.basename(repository.root)} · ${repository.branch || 'detached'}`
+        : undefined
+      view.badge = this.searchState.results.length > 0
+        ? { value: this.searchState.results.length, tooltip: `${this.searchState.results.length} matching commits` }
+        : undefined
+      view.message = searchStatusMessage(this.searchState, this.runtime.state)
     }
-    for (const source of result.matchSources) if (!current.matchSources.includes(source)) current.matchSources.push(source)
-    for (const file of result.files) {
-      if (!current.files.some((candidate) => candidate.path === file.path && candidate.oldPath === file.oldPath)) current.files.push(file)
+    void vscode.commands.executeCommand('setContext', 'gitgit.searchRunning', this.searchState.phase === 'running')
+    void vscode.commands.executeCommand('setContext', 'gitgit.searchHasResults', this.searchState.results.length > 0)
+  }
+
+}
+
+function commitTreeItem(node: SearchCommitNode): vscode.TreeItem {
+  const item = new vscode.TreeItem(
+    node.label,
+    node.children.length > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+  )
+  item.id = node.id
+  item.description = node.description
+  item.iconPath = new vscode.ThemeIcon('git-commit')
+  item.contextValue = 'gitgit.searchCommit'
+  item.accessibilityInformation = { label: node.accessibilityLabel, role: 'treeitem' }
+  const tooltip = new vscode.MarkdownString(undefined, true)
+  tooltip.appendMarkdown('$(git-commit) **GitGit Search**\n\n')
+  tooltip.appendText(node.result.message)
+  tooltip.appendMarkdown('\n\n')
+  tooltip.appendText(`Author: ${node.result.author.name}\nDate: ${node.result.date}\nCommit: ${node.result.commit}`)
+  if (node.result.refs.length > 0) {
+    tooltip.appendMarkdown('\n\n')
+    tooltip.appendText(`Refs: ${node.result.refs.join(', ')}`)
+  }
+  item.tooltip = tooltip
+  return item
+}
+
+function groupTreeItem(node: SearchGroupNode): vscode.TreeItem {
+  const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded)
+  item.id = node.id
+  item.description = node.description
+  item.iconPath = new vscode.ThemeIcon(node.group === 'matched' ? 'search' : 'files')
+  item.contextValue = 'gitgit.searchGroup'
+  return item
+}
+
+function fileTreeItem(node: SearchFileNode): vscode.TreeItem {
+  const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None)
+  item.id = node.id
+  item.description = node.description
+  item.iconPath = fileStatusIcon(node.file.status)
+  item.contextValue = node.group === 'matched' ? 'gitgit.searchMatchedFile' : 'gitgit.searchChangedFile'
+  item.accessibilityInformation = { label: node.accessibilityLabel, role: 'treeitem' }
+  const action = searchFileSelection(node)
+  if (action) {
+    item.command = {
+      command: 'gitgit.commit.select',
+      title: 'Open Revision',
+      arguments: [action],
     }
   }
-  return [...grouped.values()]
+  const tooltip = new vscode.MarkdownString(undefined, true)
+  tooltip.appendMarkdown(node.group === 'matched' ? '**Matched file**\n\n' : '**Changed file**\n\n')
+  tooltip.appendText(node.file.oldPath ? `${node.file.oldPath} → ${node.file.path}` : node.file.path)
+  tooltip.appendMarkdown('\n\n')
+  tooltip.appendText(`Status: ${node.file.status}`)
+  if ('matchSources' in node.file) {
+    tooltip.appendMarkdown('\n\n')
+    tooltip.appendText(`Matched: ${node.file.matchSources.join(', ')}`)
+  }
+  item.tooltip = tooltip
+  return item
 }
 
-function renderResult(result: SearchResult): string {
-  const files = result.files.map((file) => `<div class="file"><span>${escapeHtml(file.status)} ${escapeHtml(file.path)}</span><button data-action="selectCommitFile" data-commit="${escapeHtml(result.commit)}" data-path="${escapeHtml(file.path)}" data-old-path="${escapeHtml(file.oldPath ?? '')}">Select</button><button data-action="openFile" data-commit="${escapeHtml(result.commit)}" data-path="${escapeHtml(file.path)}" data-old-path="${escapeHtml(file.oldPath ?? '')}">Open</button></div>`).join('')
-  const badges = result.matchSources.map((source) => `<span class="badge">${escapeHtml(source === 'msg' ? 'Message' : source.toUpperCase())}</span>`).join('')
-  return `<article class="result"><div class="headline"><span class="commit">${escapeHtml(result.shortCommit)}</span><span class="message">${escapeHtml(result.message)}</span></div><div class="meta">${escapeHtml(result.author.name)} · ${escapeHtml(result.date)}</div><div class="badges">${badges}</div><div class="files">${files}</div></article>`
+function fileStatusIcon(status: string): vscode.ThemeIcon {
+  switch (status[0]) {
+    case 'A': return new vscode.ThemeIcon('diff-added')
+    case 'D': return new vscode.ThemeIcon('diff-removed')
+    case 'R':
+    case 'C': return new vscode.ThemeIcon('diff-renamed')
+    default: return new vscode.ThemeIcon('diff-modified')
+  }
+}
+
+async function filterInput(title: string, placeHolder: string, value: string): Promise<string | undefined> {
+  return vscode.window.showInputBox({ title: `GitGit Search: ${title}`, placeHolder, value })
 }

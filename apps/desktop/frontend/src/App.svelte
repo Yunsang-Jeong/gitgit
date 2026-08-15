@@ -83,6 +83,7 @@
     scanned: number
     resultScope: string
     resultAllRefs: boolean
+    hasMore: boolean
     executedDraft: SearchDraftSnapshot | null
     hasSearched: boolean
     lastSearchedAt?: string
@@ -135,6 +136,7 @@
   let scanned = 0
   let resultScope = 'HEAD'
   let resultAllRefs = false
+  let searchHasMore = false
   let executedSearchDraft: SearchDraftSnapshot | null = null
   let searchError = ''
   let searchSessions: SearchSessionState[] = []
@@ -275,6 +277,7 @@
     scanned,
     resultScope,
     resultAllRefs,
+    hasMore: searchHasMore,
     executedDraft: executedSearchDraft ? cloneSearchDraft(executedSearchDraft) : null,
     hasSearched,
     lastSearchedAt: searchLastSearchedAt || undefined,
@@ -1491,6 +1494,7 @@
       scanned: 0,
       resultScope: 'HEAD',
       resultAllRefs: false,
+      hasMore: false,
       executedDraft: null,
       hasSearched: false,
       lastSearchedAt: undefined,
@@ -1570,6 +1574,7 @@
       scanned,
       resultScope,
       resultAllRefs,
+      hasMore: searchHasMore,
       executedDraft: executedSearchDraft ? cloneSearchDraft(executedSearchDraft) : null,
       hasSearched,
       lastSearchedAt: searchLastSearchedAt || session.lastSearchedAt,
@@ -1591,6 +1596,7 @@
     scanned = session.scanned
     resultScope = session.resultScope
     resultAllRefs = session.resultAllRefs
+    searchHasMore = session.hasMore
     executedSearchDraft = session.executedDraft ? cloneSearchDraft(session.executedDraft) : null
     hasSearched = session.hasSearched
     searchLastSearchedAt = session.lastSearchedAt ?? ''
@@ -1611,6 +1617,7 @@
     scanned = 0
     resultScope = 'HEAD'
     resultAllRefs = false
+    searchHasMore = false
     executedSearchDraft = null
     hasSearched = false
     searchLastSearchedAt = ''
@@ -1657,6 +1664,7 @@
       query: session.draft.patterns.map(searchPatternText).join(' '),
       status,
       result_count: searchResultCommitCount(session.results),
+      has_more: session.hasMore,
       last_searched_at: session.lastSearchedAt,
     }
   }
@@ -1682,7 +1690,7 @@
         worktreeRoot: state.root,
         draft: { ...preserved.draft, scope: state.branch || 'HEAD', allRefs: false },
         results: [], selectedIndex: -1, scanned: 0,
-        resultScope: 'HEAD', resultAllRefs: false,
+        resultScope: 'HEAD', resultAllRefs: false, hasMore: false,
         executedDraft: null, hasSearched: false, lastSearchedAt: undefined, error: '',
       }
       searchSessions = searchSessions.map((session) => session.id === retargeted.id ? retargeted : session)
@@ -1720,6 +1728,7 @@
         scanned: 0,
         resultScope: 'HEAD',
         resultAllRefs: false,
+        hasMore: false,
         executedDraft: null,
         hasSearched: false,
         lastSearchedAt: undefined,
@@ -1786,6 +1795,7 @@
       scanned = response.scanned
       resultScope = response.scope
       resultAllRefs = response.all_refs
+      searchHasMore = response.has_more
       executedSearchDraft = draft
       hasSearched = true
       selectedSearchIndex = searchResultCommitCount(results) > 0 ? 0 : -1
@@ -1825,6 +1835,7 @@
     hasSearched = false
     resultScope = 'HEAD'
     resultAllRefs = false
+    searchHasMore = false
     executedSearchDraft = null
     searchError = ''
     searchProgress = null
@@ -2226,6 +2237,7 @@
         {searching}
         {searchProgress}
         {hasSearched}
+        hasMore={searchHasMore}
         stale={searchStale}
         applied={Boolean(executedSearchDraft)}
         {scanned}
@@ -2277,6 +2289,7 @@
     scope={remoteBranchLabel(navigatorView === 'search' && executedSearchDraft ? resultScope : navigatorView === 'search' ? scope : history.scope)}
     scanned={navigatorView === 'search' ? scanned : history.total}
     count={navigatorView === 'worktrees' ? repository?.worktrees.length ?? 0 : navigatorView === 'search' ? groupedSearchResults.length : filteredCommits.length}
+    hasMore={navigatorView === 'search' && searchHasMore}
     loaded={history.commits.length}
     message={statusMessage}
     kind={statusKind}

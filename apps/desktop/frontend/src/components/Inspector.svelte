@@ -59,7 +59,8 @@
   const commitMessageEditorMinHeight = 25
   const commitMessageEditorMaxHeight = 180
 
-  $: changedFileTree = buildChangedFileTree(selected?.files ?? [])
+  $: selectedChangedFiles = selected && 'changed_files' in selected ? selected.changed_files : selected?.files ?? []
+  $: changedFileTree = buildChangedFileTree(selectedChangedFiles)
   $: selectedParents = selected && 'parents' in selected ? selected.parents : []
   $: selectedRefContext = inspectorRefContext(selected?.refs, containingBranches(selected), defaultBranch, historicalBranch(selected))
   $: matchedSearchFiles = selected && 'matched_files' in selected ? selected.matched_files ?? [] : []
@@ -317,7 +318,7 @@
     <RepositoryTree
       revision={fileRevision}
       {allUsesDefault}
-      changedFiles={selected?.files ?? []}
+      changedFiles={selectedChangedFiles}
       {onLoadTree}
       onCopyPath={(path) => void copyLayer(path, 'File path')}
       onAddSearch={onAddFileSearch}
@@ -415,15 +416,15 @@
 
     <section class="changed-files">
       <div class="inspector-section-title">
-        <span class="changed-files-heading">Changed files <span>({selected.files.length})</span></span>
+        <span class="changed-files-heading">Changed files <span>({selectedChangedFiles.length})</span></span>
         <div class="changed-files-view-toggle" role="group" aria-label="Changed files layout">
           <button class:active={changedFilesView === 'list'} type="button" aria-pressed={changedFilesView === 'list'} on:click={() => setChangedFilesView('list')}>List</button>
           <button class:active={changedFilesView === 'tree'} type="button" aria-pressed={changedFilesView === 'tree'} on:click={() => setChangedFilesView('tree')}>Tree</button>
         </div>
       </div>
-      {#if selected.files.length > 0 && changedFilesView === 'list'}
+      {#if selectedChangedFiles.length > 0 && changedFilesView === 'list'}
         <div class="changed-file-list" on:scroll={() => closeDiffPopover()}>
-          {#each selected.files as file}
+          {#each selectedChangedFiles as file}
             <button
               type="button"
               on:click={(event) => void openDiffPopover(event, file)}
@@ -440,7 +441,7 @@
             </button>
           {/each}
         </div>
-      {:else if selected.files.length > 0}
+      {:else if selectedChangedFiles.length > 0}
         <div class="changed-file-list changed-file-tree" role="tree" aria-label="Changed files tree" on:scroll={() => closeDiffPopover()}>
           {#each visibleChangedNodes as visible (visible.node.path)}
             {@const node = visible.node}

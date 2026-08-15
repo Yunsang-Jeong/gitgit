@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: specification
 scope: vscode-extension
-last_updated: 2026-08-14
+last_updated: 2026-08-15
 ---
 
 # Visual Studio Code Extension
@@ -20,7 +20,7 @@ v0.1은 다음 흐름을 기본으로 한다.
 
 - 현재 file의 line blame을 editor에서 확인한다.
 - 현재 repository의 history를 GitGit Search 조건으로 검색한다.
-- 선택한 commit이 현재 file에 만든 변경 range와 삭제 anchor를 editor에서 확인한다.
+- 선택한 commit의 read-only file snapshot을 열고 변경 range와 삭제 anchor를 editor에서 확인한다.
 - 현재 file의 commit history를 열고 Search 또는 change highlight의 대상으로 전환한다.
 
 Extension과 helper는 commit, working tree, ref 또는 repository를 변경하지 않는다. Commit rewrite, checkout, fetch, pull, push와 worktree lifecycle은 VS Code integration의 범위가 아니다.
@@ -57,35 +57,50 @@ Line blame은 active local file의 repository-relative path와 필요한 line ra
 - Document, active editor 또는 repository가 바뀌면 이전 결과를 폐기한다. Terminal에서 checkout/rebase처럼 editor event 없이 HEAD를 바꾼 경우에는 `GitGit: Refresh Repository`로 repository revision을 다시 발견한다.
 - 새 요청이 이전 요청을 대체하면 `$/cancelRequest`를 보내고 stale result를 표시하지 않는다.
 
-Line blame decoration은 GitGit이 계산한 정보만 더하며 VS Code의 built-in SCM decoration을 대체하지 않는다.
+Line blame decoration은 GitGit이 계산한 정보만 더하며 VS Code의 built-in SCM decoration을 대체하지 않는다. 기본 `auto` mode는 VS Code built-in Git blame이 활성화되지 않았을 때 active line 하나만 표시하고, 다른 extension의 전체 activation state에는 결합하지 않는다.
+
+- Inline text는 `│ GitGit · <author> · <relative time>`처럼 source code와 provenance의 경계와 제공자를 함께 표시한다. Working tree line은 `│ GitGit · Working tree`로 쓴다. Commit ID와 subject는 Hover에서 확인한다.
+- Foreground는 VS Code의 muted `editorCodeLens.foreground`를 사용하고 별도 blue brand color, background나 pill을 넣지 않는다. 구분은 색이 아니라 `│ GitGit` label로 보장한다.
+- Hover 범위는 line 전체가 아니라 EOL 한 점으로 제한한다. Hover는 `GitGit Blame`, subject, Author, Authored, Commit label을 제공한다.
+- Commit message와 local remote metadata로 review를 보수적으로 식별할 수 있으면 Hover에 `Open PR #N` 또는 `Open MR !N` link를 추가한다. Public GitHub의 exact 2-parent merge subject와 public GitLab의 마지막 exact 2-parent `See merge request <path>!N` trailer만 인정한다. 일반 `(#N)`, message 본문의 review URL, unknown self-hosted provider는 merge provenance로 추정하지 않는다.
+- Review link는 network나 provider API를 호출해 조회하지 않는다. Helper가 credential·unsafe transport를 제외하고 정규화한 HTTPS remote와 GitHub/GitLab의 well-known SSH host, commit별 bounded metadata만 사용한다. Fork/upstream이 모호하거나 provider/path가 충돌하면 link를 표시하지 않는다.
 
 ### File history와 Search
 
 File history는 active file을 변경한 commit을 현재 repository scope에서 읽는다. Search는 Desktop Search와 같은 system Git domain을 사용하며 message, diff, file pattern과 scope option을 helper의 `search.run` 요청으로 전달한다.
 
+- `File History`는 VS Code native Tree View를 유지하고 view description에 현재 file 이름을 표시한다. Commit row는 native `git-commit` icon, subject, short hash와 author를 사용한다.
+- `Search Results`는 VS Code native Tree View다. View title의 Search action은 필요할 때만 VS Code Quick Input을 사용한다. 빈 expression에서는 source(`Message`, `Diff`, `File path`, `Advanced expression`) Quick Pick을 거쳐 expression Input Box를 열고, 기존 expression이 있으면 Input Box를 바로 연다. 상시 form은 sidebar 공간을 차지하지 않는다.
+- Engine, author, date, ref scope와 rename option은 `Configure Search Filters` Quick Pick에서 편집한다. Query와 filter는 extension process memory에만 유지하며 자동 재실행하거나 Recent Search로 저장하지 않는다.
+- Search result는 unique matching commit당 native row 하나다. Commit row는 subject, relative date, author, ref와 `N matched · M changed`를 표시하고, 한 번 펼치면 `Matched files`와 `Other changed files`가 분리된다. Message-only match는 file match를 만들지 않으며 empty commit도 결과로 남는다.
+- File path를 선택하면 read-only revision snapshot을 열고, hover/focus inline action과 우클릭 context menu의 `Open Working File`은 현재 working-tree file을 연다. Commit context menu는 full object ID 복사를 제공한다.
+- Result count와 `limit=250`은 raw file match가 아니라 unique commit 기준이다. `hasMore`가 true면 status의 `N+ commits`가 결과가 truncated됐음을 표시한다.
+- Selection, collapse/expand, keyboard navigation, focus, theme, screen reader와 context menu lifecycle은 native Tree View가 담당한다. Custom Search Webview와 자체 nested scroll/focus 복원 code는 사용하지 않는다.
 - Search 실행 단위는 active local repository다.
-- 결과의 commit과 file path는 editor navigation, revision content와 commit change highlight로 연결할 수 있다.
+- 결과의 commit과 file path는 working-tree navigation 또는 read-only revision snapshot과 commit change highlight로 연결할 수 있다. Search의 `Working File`은 working-tree file을 열고 `Revision`은 선택 commit의 snapshot을 연다.
 - 진행 상태는 `$/progress` notification으로 전달하고 취소된 실행의 partial result를 최종 결과로 채택하지 않는다.
 - Extension은 Search session을 Git repository에 기록하거나 commit을 변경하지 않는다.
 
 ### Commit change highlight
 
-Commit change highlight는 선택한 commit의 file diff에서 추가·수정된 target range와 삭제된 line의 anchor를 표시한다. 이는 working tree의 unstaged/staged 변경 gutter와 별개의 commit-relative overlay다.
+Commit change highlight는 선택한 commit의 file diff에서 추가·수정된 target range와 삭제된 line의 anchor를 표시한다. 이는 working tree의 unstaged/staged 변경 gutter와 별개의 commit-relative overlay다. History item을 선택하거나 Search의 `Revision`을 실행하면 `gitgit-revision:` scheme의 read-only snapshot을 열어 commit 좌표를 그대로 적용한다.
 
 - Highlight 기준은 commit과 repository-relative file path를 함께 보존한다.
-- Helper의 `revision.content`와 active editor text가 정확히 같을 때만 commit blob 좌표를 적용한다. 이후 commit, dirty buffer 또는 line-ending 차이로 text가 달라졌으면 잘못된 line을 표시하지 않고 decoration을 비운다.
-- Active file, repository 또는 선택 commit이 달라지면 이전 decoration을 제거한다.
-- 삭제는 존재하지 않는 target line을 만들지 않고 인접 line anchor로 표시한다.
+- 추가·수정·rename은 선택 commit의 postimage를 열고 `diff.file`의 target range와 deletion anchor를 그 snapshot에 적용한다.
+- File 전체 삭제(`D` status)는 선택 commit에 postimage가 없으므로 first parent의 preimage를 열고 실제 file line 전체를 deletion으로 표시한다. File-to-gitlink 같은 type replacement는 삭제로 오표시하지 않는다. Empty file과 trailing-newline의 phantom line에는 decoration을 만들지 않는다.
+- 다른 editor, repository 또는 선택 commit으로 전환하면 이전 decoration을 제거한다. Virtual document를 열었다는 이유로 multi-root workspace의 다른 repository를 재발견하지 않는다.
 - Binary file, repository 밖의 path와 helper가 안전하게 해석할 수 없는 diff는 highlight하지 않는다.
+- 같은 selection의 working-tree file로 돌아간 경우에는 file 내용과 commit blob이 정확히 같을 때만 기존 좌표를 재사용한다.
 
-Working tree에 더 이상 없는 deleted file에는 열 수 있는 active editor가 없으므로 v0.1은 deletion anchor를 표시하지 않는다. 선택한 historical commit과 현재 file content가 다른 경우의 정확한 overlay와 deleted-file snapshot은 revision virtual document를 도입할 때 확장한다.
+Revision URI는 full commit object ID, repository-relative path와 repository root hash를 검증한다. Provider는 trusted local workspace에서 현재 승인된 repository session과 root가 일치할 때만 helper를 호출하며 URI 전체를 log하지 않는다. Snapshot은 disk에 쓰지 않고 `revision.content`의 bounded UTF-8 blob만 제공한다.
 
 ## Architecture와 protocol
 
 | Layer | 책임 |
 | --- | --- |
-| `apps/vscode/src/editor/` | Line blame, file history와 commit highlight state/decoration |
-| `apps/vscode/src/search/` | Search expression, session state와 Webview |
+| `apps/vscode/src/editor/` | Line blame, file history, revision virtual document와 commit highlight state/decoration |
+| `apps/vscode/src/search/` | Search expression, session state, native Tree View와 QuickInput model |
+| `apps/vscode/media/` | 단색 Activity Bar SVG와 256px Marketplace PNG |
 | `apps/vscode/src/helper/` | Bundled helper process lifecycle와 protocol validation |
 | `apps/vscode/src/shared/` | Repository identifier와 relative-path validation |
 | `cmd/gitgit-vscode-helper/` | NDJSON JSON-RPC server entrypoint와 protocol adapter |
@@ -106,6 +121,10 @@ Canonical method allowlist는 다음과 같다.
 - `diff.file`
 
 Notification은 `$/cancelRequest`와 `$/progress`만 사용한다. Repository path는 존재하는 absolute worktree여야 하고 file path는 repository-relative이며 repository 밖으로 escape할 수 없다. Extension은 raw shell command나 임의 Git argv를 protocol에 전달하지 않는다.
+
+`repository.discover`는 review-link 추론에 사용할 수 있는 sanitized `webRemotes`만 선택적으로 반환한다. `blame.lines`의 full commit message와 parent count는 line마다 복제하지 않고 commit object ID별 `commitMetadata`에 한 번만 담으며, optional metadata가 size limit을 넘으면 blame line 자체는 유지하고 review link만 생략한다.
+
+`search.run`은 `matchedFiles`와 commit의 전체 `changedFiles`를 분리한 commit-first result를 반환한다. File별 Boolean expression을 먼저 평가하므로 서로 다른 file의 `FILE:`와 `DIFF:` hit를 하나의 true로 합치지 않으며, response의 `hasMore`는 limit 뒤 실제 matching commit을 하나 더 확인한 경우에만 true다.
 
 Extension은 시작할 때 `initialize`로 protocol version과 capability를 협상한다. Extension version과 helper server version의 exact equality는 요구하지 않으며 protocol v1과 필요한 method가 호환되는지를 판정한다. Protocol mismatch, missing helper, executable failure와 malformed response는 명시적 error로 처리하고 다른 Git execution path로 fallback하지 않는다.
 
@@ -141,7 +160,7 @@ task vscode:package
 task vscode:package:target TARGET=win32-x64
 ```
 
-Artifact는 `dist/vscode/gitgit-0.1.0-<target>.vsix`에 생성되며 Git에는 포함하지 않는다. Package task는 `npm ci`, extension test·typecheck·build, root Go test를 먼저 통과한 뒤 helper를 만들고 `vsce package --target`을 실행한다. 마지막 content audit가 VSIX manifest의 target, extension ID/version, helper 수와 GOOS/GOARCH/CGO 정보를 확인하며 `src/`, `test/`, `tests/`, `testdata/`, `node_modules/`, source map과 protocol fixture가 package에 들어가면 실패한다.
+Artifact는 `dist/vscode/gitgit-0.1.0-<target>.vsix`에 생성되며 Git에는 포함하지 않는다. Package task는 `npm ci`, extension test·typecheck·build, root Go test를 먼저 통과한 뒤 helper를 만들고 `vsce package --target`을 실행한다. 마지막 content audit가 VSIX manifest의 target, extension ID/version, helper 수와 GOOS/GOARCH/CGO 정보, Marketplace icon metadata와 packaged 256×256 PNG를 확인한다. Packaged `package.json`의 native `Search Results` view와 핵심 Search title command/menu, compiled extension의 `createTreeView` registration evidence도 확인하며 `src/`, `test/`, `tests/`, `testdata/`, `node_modules/`, source map과 protocol fixture가 package에 들어가면 실패한다.
 
 같은 directory의 `release-manifest.json`은 다음 schema를 canonical key와 target 순서로 기록한다.
 
@@ -186,7 +205,7 @@ Compile 또는 package 성공만으로 release 완료를 판정하지 않는다.
 다음 항목은 protocol과 platform 배포가 안정된 뒤 별도 범위로 다룬다.
 
 - File history graph 전용 Webview와 richer graph interaction
-- Historical revision virtual document와 서로 다른 revision 사이의 line mapping
+- Parent↔commit revision compare와 서로 다른 revision 사이의 line mapping
 - Marketplace 자동 publish와 Desktop↔VS Code install handoff
 - Windows Desktop installer와 extension discovery 통합
 - Linux, Windows ARM64와 remote extension host

@@ -5,6 +5,7 @@ import {
   buildSearchRequest,
   initialSearchState,
   reduceSearchState,
+  validateSearchDraft,
   type SearchDraft,
 } from '../../src/search/model.js'
 import type { SearchResponse, SearchResult } from '../../src/helper/protocol.js'
@@ -26,12 +27,13 @@ const result: SearchResult = {
   author: { name: 'Test' },
   date: '2026-08-13T00:00:00Z',
   refs: [],
-  files: [{ status: 'M', path: 'main.go' }],
+  matchedFiles: [],
+  changedFiles: [{ status: 'M', path: 'main.go' }],
   matchSources: ['msg'],
 }
 
 function response(results = [result]): SearchResponse {
-  return { scope: 'HEAD', allRefs: false, scanned: 42, count: results.length, results }
+  return { scope: 'HEAD', allRefs: false, scanned: 42, count: results.length, hasMore: false, results }
 }
 
 test('Search request preserves Desktop defaults and wire casing', () => {
@@ -64,6 +66,7 @@ test('new and failed requests preserve the previous successful results', () => {
   state = reduceSearchState(state, { type: 'success', requestId: 1, draft, response: response() })
   state = reduceSearchState(state, { type: 'start', requestId: 2, draft })
   assert.deepEqual(state.results, [result])
+  assert.equal(state.hasMore, false)
   state = reduceSearchState(state, { type: 'failure', requestId: 2, message: 'failed' })
   assert.equal(state.error, 'failed')
   assert.equal(state.notice, 'Previous successful results are preserved.')
@@ -79,6 +82,31 @@ test('stale progress/results are ignored and cancel discards partial state', () 
   assert.equal(state.activeRequestId, undefined)
   assert.equal(state.notice, 'Search cancelled. Partial results were discarded.')
   assert.deepEqual(state.results, [])
+})
+
+test('a cancelled request cannot settle over an invalid replacement attempt', () => {
+  const invalidDraft = { ...draft, expression: 'MSG: *cache*', followRename: true }
+  const validation = validateSearchDraft(invalidDraft)
+  let state = reduceSearchState(initialSearchState(), { type: 'start', requestId: 4, draft })
+  state = reduceSearchState(state, { type: 'cancel', requestId: 4 })
+  state = reduceSearchState(state, { type: 'edit', draft: invalidDraft })
+  state = {
+    ...state,
+    phase: 'error',
+    error: validation.error,
+  }
+
+  const afterLateSuccess = reduceSearchState(state, {
+    type: 'success',
+    requestId: 4,
+    draft,
+    response: response(),
+  })
+  assert.equal(state.activeRequestId, undefined)
+  assert.equal(validation.error, 'Follow renames requires at least one FILE: condition.')
+  assert.equal(afterLateSuccess, state)
+  assert.deepEqual(afterLateSuccess.draft, invalidDraft)
+  assert.deepEqual(afterLateSuccess.results, [])
 })
 
 test('editing after success marks the previous results stale', () => {

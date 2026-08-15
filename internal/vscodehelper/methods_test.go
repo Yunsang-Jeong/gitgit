@@ -100,6 +100,79 @@ func TestBlameLinesSupportsUnsavedUTF8ContentsAndCommittedMetadata(t *testing.T)
 	if line.Commit != fixture.fileCommit || line.Author.Name != "GitGit Test" || line.Author.Email != "gitgit@example.invalid" || line.Date == "" || line.Message != "update new file" {
 		t.Fatalf("committed blame metadata = %#v", line)
 	}
+	metadata := committedResult.CommitMetadata[line.Commit]
+	if metadata.Message != "update new file\n" || metadata.ParentCount != 1 {
+		t.Fatalf("commit metadata = %#v", metadata)
+	}
+}
+
+func TestBlameLinesReturnsFullCommitMessageMetadataOncePerCommit(t *testing.T) {
+	fixture := newMethodFixture(t)
+	writeFixtureFile(t, filepath.Join(fixture.root, "new.txt"), []byte(fixture.fileContents+"review line\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "new.txt")
+	runGit(
+		t,
+		fixture.gitPath,
+		fixture.root,
+		"-c", "commit.gpgsign=false",
+		"commit", "--no-gpg-sign",
+		"-m", "merge reviewed change",
+		"-m", "See merge request platform/GitGit!73",
+	)
+	commit := gitOutput(t, fixture.gitPath, fixture.root, "rev-parse", "HEAD")
+
+	response := serveRPC(t, fixture.server, "blame.lines", map[string]any{
+		"repositoryRoot": fixture.root,
+		"relativePath":   "new.txt",
+		"startLine":      4,
+		"endLine":        4,
+	})
+	if response.Error != nil {
+		t.Fatalf("blame.lines error: %#v", response.Error)
+	}
+	var result BlameLinesResult
+	decodeResult(t, response, &result)
+	if len(result.CommitMetadata) != 1 {
+		t.Fatalf("commit metadata = %#v, want one deduplicated entry", result.CommitMetadata)
+	}
+	metadata := result.CommitMetadata[commit]
+	if metadata.Message != "merge reviewed change\n\nSee merge request platform/GitGit!73\n" || metadata.ParentCount != 1 {
+		t.Fatalf("commit metadata = %#v", metadata)
+	}
+}
+
+func TestBlameLinesOmitsOversizedOptionalCommitMetadata(t *testing.T) {
+	fixture := newMethodFixture(t)
+	writeFixtureFile(t, filepath.Join(fixture.root, "new.txt"), []byte(fixture.fileContents+"large message line\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "new.txt")
+	messagePath := filepath.Join(fixture.root, "large-message.txt")
+	writeFixtureFile(t, messagePath, []byte("large review\n\n"+strings.Repeat("x", maxBlameMetadataBytes+1)))
+	runGit(
+		t,
+		fixture.gitPath,
+		fixture.root,
+		"-c", "commit.gpgsign=false",
+		"commit", "--no-gpg-sign",
+		"-F", messagePath,
+	)
+
+	response := serveRPC(t, fixture.server, "blame.lines", map[string]any{
+		"repositoryRoot": fixture.root,
+		"relativePath":   "new.txt",
+		"startLine":      4,
+		"endLine":        4,
+	})
+	if response.Error != nil {
+		t.Fatalf("blame.lines must survive optional metadata overflow: %#v", response.Error)
+	}
+	var result BlameLinesResult
+	decodeResult(t, response, &result)
+	if len(result.Lines) != 1 || result.Lines[0].Message != "large review" {
+		t.Fatalf("blame line = %#v", result.Lines)
+	}
+	if len(result.CommitMetadata) != 0 {
+		t.Fatalf("oversized commit metadata must be omitted: %#v", result.CommitMetadata)
+	}
 }
 
 func TestBlameLinesReturnsStableRangeBinaryAndUntrackedErrors(t *testing.T) {
@@ -210,6 +283,69 @@ func TestRevisionContentReturnsBoundedUTF8Text(t *testing.T) {
 	}
 	if responseError := validateText(make([]byte, maxTextBytes+1)); responseError == nil || responseError.Data.Code != "file_too_large" {
 		t.Fatalf("oversized text error = %#v", responseError)
+	}
+}
+
+func TestRevisionContentReturnsExactUTF8BlobBytes(t *testing.T) {
+	fixture := newMethodFixture(t)
+	runGit(t, fixture.gitPath, fixture.root, "config", "core.autocrlf", "false")
+	content := "\n첫 줄\r\nemoji 🧭\n마지막 줄"
+	writeFixtureFile(t, filepath.Join(fixture.root, "exact-utf8.txt"), []byte(content))
+	runGit(t, fixture.gitPath, fixture.root, "add", "exact-utf8.txt")
+	commitFixture(t, fixture.gitPath, fixture.root, "add exact utf8 fixture")
+
+	response := serveRPC(t, fixture.server, "revision.content", map[string]any{
+		"repositoryRoot": fixture.root,
+		"relativePath":   "exact-utf8.txt",
+		"revision":       "HEAD",
+	})
+	if response.Error != nil {
+		t.Fatalf("revision.content error: %#v", response.Error)
+	}
+	var result RevisionContentResult
+	decodeResult(t, response, &result)
+	if result.Content != content {
+		t.Fatalf("content bytes = %q, want exact blob bytes %q", []byte(result.Content), []byte(content))
+	}
+}
+
+func TestRevisionContentRejectsTreeAndGitlinkObjects(t *testing.T) {
+	fixture := newMethodFixture(t)
+	if err := os.MkdirAll(filepath.Join(fixture.root, "nested"), 0o700); err != nil {
+		t.Fatalf("create nested fixture: %v", err)
+	}
+	writeFixtureFile(t, filepath.Join(fixture.root, "nested", "file.txt"), []byte("nested\n"))
+	runGit(t, fixture.gitPath, fixture.root, "add", "nested/file.txt")
+	runGit(
+		t,
+		fixture.gitPath,
+		fixture.root,
+		"update-index",
+		"--add",
+		"--cacheinfo",
+		"160000,"+fixture.head+",vendor/module",
+	)
+	commitFixture(t, fixture.gitPath, fixture.root, "add non-blob objects")
+
+	for _, test := range []struct {
+		name       string
+		path       string
+		stableCode string
+	}{
+		{name: "tree", path: "nested", stableCode: "revision_content_not_file"},
+		{name: "gitlink", path: "vendor/module", stableCode: "revision_content_not_file"},
+		{name: "missing", path: "missing.txt", stableCode: "revision_content_not_found"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := serveRPC(t, fixture.server, "revision.content", map[string]any{
+				"repositoryRoot": fixture.root,
+				"relativePath":   test.path,
+				"revision":       "HEAD",
+			})
+			if response.Error == nil || response.Error.Data.Code != test.stableCode {
+				t.Fatalf("error = %#v, want data.code %q", response.Error, test.stableCode)
+			}
+		})
 	}
 }
 

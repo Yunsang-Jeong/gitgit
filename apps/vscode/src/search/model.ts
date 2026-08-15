@@ -28,6 +28,7 @@ export interface SearchViewState {
   notice: string
   results: SearchResult[]
   scanned: number
+  hasMore: boolean
 }
 
 export type SearchStateAction =
@@ -56,6 +57,7 @@ export function initialSearchState(): SearchViewState {
     notice: '',
     results: [],
     scanned: 0,
+    hasMore: false,
   }
 }
 
@@ -112,6 +114,7 @@ export function reduceSearchState(state: SearchViewState, action: SearchStateAct
           : 'Expression changed while Search was running.',
         results: [...action.response.results],
         scanned: action.response.scanned,
+        hasMore: action.response.hasMore,
       }
     case 'failure':
       if (state.activeRequestId !== action.requestId) return state

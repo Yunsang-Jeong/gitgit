@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	defaultHistoryLimit = 100
-	maxHistoryLimit     = 500
-	maxBlameLines       = 2_000
-	maxTextBytes        = 4 * 1024 * 1024
+	defaultHistoryLimit   = 100
+	maxHistoryLimit       = 500
+	maxBlameLines         = 2_000
+	maxBlameMetadataBytes = 2 * 1024 * 1024
+	maxTextBytes          = 4 * 1024 * 1024
 )
 
 var offlineGitEnvironment = []string{
@@ -201,7 +202,86 @@ func (s *Server) blameLines(ctx context.Context, rawParams json.RawMessage) (Bla
 	if len(lines) != params.EndLine-params.StartLine+1 {
 		return BlameLinesResult{}, rpcError(codeInternalError, "invalid_git_output", "Git blame returned an unexpected line count")
 	}
-	return BlameLinesResult{Lines: lines}, nil
+	commitMetadata, responseError := readBlameCommitMetadata(ctx, repository, lines)
+	if responseError != nil {
+		return BlameLinesResult{}, responseError
+	}
+	return BlameLinesResult{Lines: lines, CommitMetadata: commitMetadata}, nil
+}
+
+func readBlameCommitMetadata(
+	ctx context.Context,
+	repository *gitexec.Repository,
+	lines []BlameLine,
+) (map[string]BlameCommitMetadata, *RPCError) {
+	unique := make([]string, 0, len(lines))
+	seen := make(map[string]bool, len(lines))
+	for _, line := range lines {
+		if seen[line.Commit] || isWorkingTreeObjectID(line.Commit) {
+			continue
+		}
+		seen[line.Commit] = true
+		unique = append(unique, line.Commit)
+	}
+	if len(unique) == 0 {
+		return map[string]BlameCommitMetadata{}, nil
+	}
+
+	input := strings.NewReader(strings.Join(unique, "\n") + "\n")
+	output, err := repository.Runner.RunWithEnvLimit(
+		ctx,
+		repository.Root,
+		input,
+		offlineGitEnvironment,
+		maxBlameMetadataBytes,
+		"log",
+		"-z",
+		"--no-walk=unsorted",
+		"--no-show-signature",
+		"--format=%H%x00%P%x00%B",
+		"--stdin",
+	)
+	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return nil, cancelledError()
+		}
+		return map[string]BlameCommitMetadata{}, nil
+	}
+	fields := bytes.Split(output, []byte{0})
+	if len(fields) > 0 && len(fields[len(fields)-1]) == 0 {
+		fields = fields[:len(fields)-1]
+	}
+	if len(fields)%3 != 0 {
+		return map[string]BlameCommitMetadata{}, nil
+	}
+	metadata := make(map[string]BlameCommitMetadata, len(unique))
+	for index := 0; index < len(fields); index += 3 {
+		commit := string(fields[index])
+		if !isObjectID(commit) {
+			return map[string]BlameCommitMetadata{}, nil
+		}
+		parents := strings.Fields(string(fields[index+1]))
+		for _, parent := range parents {
+			if !isObjectID(parent) {
+				return map[string]BlameCommitMetadata{}, nil
+			}
+		}
+		// Review inference only needs ordinary merge metadata. Keep an unusual
+		// octopus commit from turning optional review metadata into a blame
+		// response failure at the client protocol boundary.
+		if len(parents) > 64 {
+			continue
+		}
+		metadata[commit] = BlameCommitMetadata{
+			Message:     string(fields[index+2]),
+			ParentCount: len(parents),
+		}
+	}
+	return metadata, nil
+}
+
+func isWorkingTreeObjectID(value string) bool {
+	return (len(value) == 40 || len(value) == 64) && strings.Trim(value, "0") == ""
 }
 
 func parseLinePorcelain(output []byte) ([]BlameLine, error) {
@@ -390,20 +470,34 @@ func readCommitFilesBatch(
 	if len(commits) == 0 {
 		return result, nil
 	}
-	var input strings.Builder
 	for _, commit := range commits {
 		if !isObjectID(commit) {
 			return nil, rpcError(codeInternalError, "invalid_git_output", "history contained an invalid commit id")
 		}
-		input.WriteString(commit)
-		input.WriteByte('\n')
 		result[commit] = []FileChange{}
+	}
+	firstParents, responseError := readFirstParentsBatch(ctx, repository, commits)
+	if responseError != nil {
+		return nil, responseError
+	}
+
+	var input strings.Builder
+	for _, commit := range commits {
+		parent := firstParents[commit]
+		if parent == "" {
+			input.WriteString(commit)
+		} else {
+			input.WriteString(commit)
+			input.WriteByte(' ')
+			input.WriteString(parent)
+		}
+		input.WriteByte('\n')
 	}
 	output, err := runReadOnlyGit(
 		ctx,
 		repository,
 		strings.NewReader(input.String()),
-		"diff-tree", "--stdin", "--root", "--name-status", "-r", "-z", "-M", "-m", "--first-parent",
+		"diff-tree", "--stdin", "--root", "--name-status", "-r", "-z", "-M",
 	)
 	if err != nil {
 		return nil, gitCommandError(ctx, err)
@@ -420,11 +514,11 @@ func readCommitFilesBatch(
 		if token == "" {
 			continue
 		}
-		if isObjectID(token) {
-			if _, expected := result[token]; !expected {
+		if commit, ok := parseDiffTreeCommit(token); ok {
+			if _, expected := result[commit]; !expected {
 				return nil, rpcError(codeInternalError, "invalid_git_output", "Git returned an unexpected commit id")
 			}
-			currentCommit = token
+			currentCommit = commit
 			continue
 		}
 		if currentCommit == "" || !validFileStatus(token) {
@@ -449,6 +543,72 @@ func readCommitFilesBatch(
 		index++
 	}
 	return result, nil
+}
+
+func readFirstParentsBatch(
+	ctx context.Context,
+	repository *gitexec.Repository,
+	commits []string,
+) (map[string]string, *RPCError) {
+	parents := make(map[string]string, len(commits))
+	if len(commits) == 0 {
+		return parents, nil
+	}
+	var input strings.Builder
+	for _, commit := range commits {
+		input.WriteString(commit)
+		input.WriteByte('\n')
+		parents[commit] = ""
+	}
+	output, err := runReadOnlyGit(
+		ctx,
+		repository,
+		strings.NewReader(input.String()),
+		"rev-list", "--parents", "--stdin", "--no-walk=unsorted",
+	)
+	if err != nil {
+		return nil, gitCommandError(ctx, err)
+	}
+	if len(output) > MaxOutputBytes {
+		return nil, rpcError(codeInternalError, "output_too_large", "Git parent output exceeds maxOutputBytes")
+	}
+	seen := make(map[string]bool, len(commits))
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		commit := fields[0]
+		if _, expected := parents[commit]; !expected || seen[commit] {
+			return nil, rpcError(codeInternalError, "invalid_git_output", "Git returned unexpected parent metadata")
+		}
+		seen[commit] = true
+		if len(fields) > 1 {
+			if !isObjectID(fields[1]) {
+				return nil, rpcError(codeInternalError, "invalid_git_output", "Git returned an invalid parent id")
+			}
+			parents[commit] = fields[1]
+		}
+		for index := 2; index < len(fields); index++ {
+			parent := fields[index]
+			if !isObjectID(parent) {
+				return nil, rpcError(codeInternalError, "invalid_git_output", "Git returned an invalid parent id")
+			}
+		}
+	}
+	for commit := range parents {
+		if !seen[commit] {
+			return nil, rpcError(codeInternalError, "invalid_git_output", "Git omitted requested parent metadata")
+		}
+	}
+	return parents, nil
+}
+
+func parseDiffTreeCommit(value string) (string, bool) {
+	if isObjectID(value) {
+		return value, true
+	}
+	return "", false
 }
 
 func validFileStatus(value string) bool {
@@ -667,20 +827,34 @@ func readRevisionBlob(
 	if responseError != nil {
 		return nil, responseError
 	}
+	typeOutput, err := runReadOnlyGit(ctx, repository, nil, "cat-file", "-t", objectSpec)
+	if err != nil {
+		return nil, gitCommandError(ctx, err)
+	}
+	if strings.TrimSpace(string(typeOutput)) != "blob" {
+		return nil, rpcError(
+			codeInvalidParams,
+			"revision_content_not_file",
+			"path at the requested revision is not a file",
+		)
+	}
 	sizeOutput, err := runReadOnlyGit(ctx, repository, nil, "cat-file", "-s", objectSpec)
 	if err != nil {
 		return nil, gitCommandError(ctx, err)
 	}
 	size, err := strconv.ParseInt(strings.TrimSpace(string(sizeOutput)), 10, 64)
-	if err != nil {
+	if err != nil || size < 0 {
 		return nil, rpcError(codeInternalError, "invalid_git_output", "Git returned an invalid blob size")
 	}
 	if size > maxTextBytes {
 		return nil, rpcError(codeInvalidParams, "file_too_large", "file exceeds the helper text size limit")
 	}
-	output, err := runReadOnlyGit(ctx, repository, nil, "show", "--no-textconv", "--end-of-options", objectSpec)
+	output, err := runReadOnlyGit(ctx, repository, nil, "cat-file", "blob", objectSpec)
 	if err != nil {
 		return nil, gitCommandError(ctx, err)
+	}
+	if int64(len(output)) != size {
+		return nil, rpcError(codeInternalError, "invalid_git_output", "Git returned an unexpected blob size")
 	}
 	if responseError := validateText(output); responseError != nil {
 		return nil, responseError

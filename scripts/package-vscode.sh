@@ -265,7 +265,8 @@ audit_vsix() {
   local target="$2"
   local expected_version="$3"
   local settings goos goarch helper_name expected_helper entries helper_entries helper_count banned_entries
-  local manifest package_json extraction_dir extracted_helper build_info
+  local manifest package_json extraction_dir extracted_helper build_info marketplace_icon extracted_icon
+  local extension_bundle extracted_extension
 
   settings="$(target_settings "${target}")"
   set -- ${settings}
@@ -273,6 +274,8 @@ audit_vsix() {
   goarch="$2"
   helper_name="$3"
   expected_helper="extension/dist/bin/${helper_name}"
+  marketplace_icon="extension/media/gitgit-marketplace.png"
+  extension_bundle="extension/dist/extension.js"
 
   [ -s "${artifact}" ] || fail "VSIX was not created: ${artifact}"
   entries="$(unzip -Z1 "${artifact}")"
@@ -283,6 +286,8 @@ audit_vsix() {
   [ "${helper_entries}" = "${expected_helper}" ] || fail "${target} VSIX contains the wrong helper path: ${helper_entries}"
   printf '%s\n' "${entries}" | grep -F 'extension/LICENSE.txt' >/dev/null || fail "${target} VSIX is missing LICENSE.txt"
   printf '%s\n' "${entries}" | grep -F 'extension/readme.md' >/dev/null || fail "${target} VSIX is missing readme.md"
+  printf '%s\n' "${entries}" | grep -Fx "${marketplace_icon}" >/dev/null || fail "${target} VSIX is missing the Marketplace icon"
+  printf '%s\n' "${entries}" | grep -Fx "${extension_bundle}" >/dev/null || fail "${target} VSIX is missing the compiled extension bundle"
 
   banned_entries="$(printf '%s\n' "${entries}" | grep -E '(^|/)(src|test|tests|testdata|node_modules)(/|$)|\.map$|protocol-v1\.json$' || true)"
   [ -z "${banned_entries}" ] || fail "${target} VSIX contains forbidden development content:\n${banned_entries}"
@@ -301,12 +306,63 @@ const expectedVersion = process.argv[3]
 const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
 if (`${pkg.publisher}.${pkg.name}` !== 'gitgit.gitgit') throw new Error('unexpected extension ID')
 if (pkg.version !== expectedVersion) throw new Error(`unexpected extension version: ${pkg.version}`)
+if (pkg.icon !== 'media/gitgit-marketplace.png') throw new Error(`unexpected Marketplace icon: ${pkg.icon}`)
+if (pkg.main !== './dist/extension.js') throw new Error(`unexpected extension entrypoint: ${pkg.main}`)
+
+const gitgitViews = pkg.contributes?.views?.gitgit
+if (!Array.isArray(gitgitViews)) throw new Error('GitGit view contributions are missing')
+const searchView = gitgitViews.find((view) => view?.id === 'gitgit.search')
+if (!searchView || searchView.name !== 'Search Results' || searchView.type !== undefined) {
+  throw new Error('gitgit.search must be a native Search Results view without type: webview')
+}
+
+const commands = new Set((pkg.contributes?.commands ?? []).map((entry) => entry?.command))
+const requiredTitleCommands = [
+  'gitgit.search.run',
+  'gitgit.search.cancel',
+  'gitgit.search.filters',
+  'gitgit.search.rerun',
+  'gitgit.search.clear',
+]
+for (const command of requiredTitleCommands) {
+  if (!commands.has(command)) throw new Error(`missing Search command contribution: ${command}`)
+}
+const titleMenu = pkg.contributes?.menus?.['view/title']
+if (!Array.isArray(titleMenu)) throw new Error('view/title menu contributions are missing')
+for (const command of requiredTitleCommands) {
+  const entry = titleMenu.find((candidate) => candidate?.command === command)
+  if (!entry || typeof entry.when !== 'string' || !entry.when.includes('view == gitgit.search')) {
+    throw new Error(`missing gitgit.search title menu contribution: ${command}`)
+  }
+}
 NODE
 
   extraction_dir="${TEMP_DIR}/extract-${target}"
   mkdir -p "${extraction_dir}"
   unzip -qq "${artifact}" "${expected_helper}" -d "${extraction_dir}"
   extracted_helper="${extraction_dir}/${expected_helper}"
+  unzip -qq "${artifact}" "${marketplace_icon}" -d "${extraction_dir}"
+  extracted_icon="${extraction_dir}/${marketplace_icon}"
+  unzip -qq "${artifact}" "${extension_bundle}" -d "${extraction_dir}"
+  extracted_extension="${extraction_dir}/${extension_bundle}"
+  "${NODE_BIN}" - "${extracted_icon}" <<'NODE'
+const fs = require('node:fs')
+
+const png = fs.readFileSync(process.argv[2])
+const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+if (png.length < 24 || !png.subarray(0, 8).equals(signature)) throw new Error('Marketplace icon is not a PNG')
+if (png.readUInt32BE(16) !== 256 || png.readUInt32BE(20) !== 256) {
+  throw new Error('Marketplace icon must be exactly 256x256')
+}
+NODE
+  "${NODE_BIN}" - "${extracted_extension}" <<'NODE'
+const fs = require('node:fs')
+
+const bundle = fs.readFileSync(process.argv[2], 'utf8')
+if (!/createTreeView\(\s*['"]gitgit\.search['"]/u.test(bundle)) {
+  throw new Error('compiled extension does not contain gitgit.search createTreeView registration evidence')
+}
+NODE
   if [ "${goos}" = "darwin" ]; then
     [ -x "${extracted_helper}" ] || fail "${target} helper lost its executable mode in the VSIX"
   fi
