@@ -64,14 +64,29 @@ func (s *WorktreeService) List(ctx context.Context) ([]WorktreeInfo, error) {
 	if err != nil {
 		return nil, apperr.Wrap("worktree_parse_error", "failed to parse worktree list", apperr.ExitFailure, err, nil)
 	}
+	root := resolvedPath(s.repo.Root)
 	for index := range items {
 		status, statusErr := s.repo.Runner.Run(ctx, items[index].Path, nil, "status", "--porcelain=v2", "-z")
-		if statusErr == nil {
+		switch {
+		case statusErr == nil:
 			items[index].Dirty = len(status) > 0
+		// A broken sibling worktree must not hide the rest of the list, but the
+		// checkout being viewed is the one whose cleanliness callers act on, so
+		// its failure has to surface rather than read as clean.
+		case resolvedPath(items[index].Path) == root:
+			return nil, worktreeGitError("read worktree status", statusErr)
 		}
 		items[index].Sparse = s.sparseState(ctx, items[index].Path)
 	}
 	return items, nil
+}
+
+func resolvedPath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return path
 }
 
 func parseWorktreeList(data []byte) ([]WorktreeInfo, error) {

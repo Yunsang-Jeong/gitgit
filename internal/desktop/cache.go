@@ -67,12 +67,59 @@ func historyScopeCacheKey(root, scope, related, head string, all bool) string {
 	return fmt.Sprintf("scope-v1\x00%s\x00%t\x00%s\x00%s\x00%s", root, all, scope, related, head)
 }
 
+// historyScopeContext keeps unexported fields, so the persisted form is an
+// explicit mirror rather than a tag on the live struct. Adding a field to one
+// without the other only loses cache warmth, never correctness, because a miss
+// simply recomputes.
+type persistentHistoryScope struct {
+	RelatedScope       string          `json:"related_scope"`
+	BranchPoint        string          `json:"branch_point"`
+	BranchPointParents []string        `json:"branch_point_parents"`
+	AllRevisions       []string        `json:"all_revisions"`
+	AllowedRemoteRefs  map[string]bool `json:"allowed_remote_refs"`
+	Total              int             `json:"total"`
+	Branches           []string        `json:"branches"`
+}
+
+func toPersistentHistoryScope(value historyScopeContext) persistentHistoryScope {
+	return persistentHistoryScope{
+		RelatedScope:       value.relatedScope,
+		BranchPoint:        value.branchPoint,
+		BranchPointParents: value.branchPointParents,
+		AllRevisions:       value.allRevisions,
+		AllowedRemoteRefs:  value.allowedRemoteRefs,
+		Total:              value.total,
+		Branches:           value.branches,
+	}
+}
+
+func fromPersistentHistoryScope(value persistentHistoryScope) historyScopeContext {
+	return historyScopeContext{
+		relatedScope:       value.RelatedScope,
+		branchPoint:        value.BranchPoint,
+		branchPointParents: value.BranchPointParents,
+		allRevisions:       value.AllRevisions,
+		allowedRemoteRefs:  value.AllowedRemoteRefs,
+		total:              value.Total,
+		branches:           value.Branches,
+	}
+}
+
 func (s *Service) cachedHistoryScope(root, fingerprint, key string) (historyScopeContext, bool) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	cache := s.cacheForRepositoryLocked(root)
 	s.refreshRefCacheLocked(cache, fingerprint)
 	value, ok := cache.historyScopes[key]
+	if !ok && s.persistentCache != nil {
+		if persisted, found, err := s.persistentCache.loadHistoryScope(root, fingerprint, key); err == nil && found {
+			value = fromPersistentHistoryScope(persisted)
+			cache.historyScopes[key] = cloneHistoryScopeContext(value)
+			cache.historyScopeKeys = append(cache.historyScopeKeys, key)
+			trimCache(cache.historyScopes, &cache.historyScopeKeys, maximumCachedHistoryScopes)
+			ok = true
+		}
+	}
 	return cloneHistoryScopeContext(value), ok
 }
 
@@ -86,6 +133,9 @@ func (s *Service) storeHistoryScope(root, fingerprint, key string, value history
 	}
 	cache.historyScopes[key] = cloneHistoryScopeContext(value)
 	trimCache(cache.historyScopes, &cache.historyScopeKeys, maximumCachedHistoryScopes)
+	if s.persistentCache != nil {
+		_ = s.persistentCache.storeHistoryScope(root, fingerprint, key, toPersistentHistoryScope(value))
+	}
 }
 
 func detailCacheKey(oid, filePath string) string {

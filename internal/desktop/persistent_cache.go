@@ -98,6 +98,20 @@ func (c *PersistentCache) storeBranches(repository, fingerprint, oid string, bra
 	return c.storeRefValue(repository, fingerprint, persistentKey("branches", repository, oid), branches)
 }
 
+// The scope context is the expensive half of a history read: it holds the
+// total commit count, which costs a full rev-list walk. Persisting it beside
+// the pages means a relaunch does not repeat that walk, and the shared
+// fingerprint keeps both invalidated together when refs move.
+func (c *PersistentCache) loadHistoryScope(repository, fingerprint, key string) (persistentHistoryScope, bool, error) {
+	var scope persistentHistoryScope
+	found, err := c.loadRefValue(repository, fingerprint, persistentKey("history-scope", repository, key), &scope)
+	return scope, found, err
+}
+
+func (c *PersistentCache) storeHistoryScope(repository, fingerprint, key string, scope persistentHistoryScope) error {
+	return c.storeRefValue(repository, fingerprint, persistentKey("history-scope", repository, key), scope)
+}
+
 func (c *PersistentCache) loadRefValue(repository, fingerprint string, key []byte, target any) (bool, error) {
 	if c == nil {
 		return false, nil

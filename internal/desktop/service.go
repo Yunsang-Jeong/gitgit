@@ -482,6 +482,24 @@ func deleteBranchIfDefaultUnchanged(ctx context.Context, repository *gitexec.Rep
 	return nil
 }
 
+// WorktreeService.List reports Dirty for every registered worktree, so the
+// viewed root's own status is already known. Fall back to asking Git only when
+// the listing could not describe this root, which should not happen for a
+// healthy repository but must not silently report a clean tree.
+func worktreeDirtyState(ctx context.Context, repository *gitexec.Repository, state RepositoryState) (bool, error) {
+	root := canonicalWorktreePath(state.Root)
+	for _, worktree := range state.Worktrees {
+		if canonicalWorktreePath(worktree.Path) == root {
+			return worktree.Dirty, nil
+		}
+	}
+	status, err := repository.Run(ctx, nil, "status", "--porcelain=v2", "-z")
+	if err != nil {
+		return false, fmt.Errorf("read repository status: %w", err)
+	}
+	return len(status) > 0, nil
+}
+
 func canonicalWorktreePath(path string) string {
 	path = filepath.Clean(strings.TrimSpace(path))
 	if absolute, err := filepath.Abs(path); err == nil {
@@ -963,11 +981,6 @@ func (s *Service) snapshot(ctx context.Context, repository *gitexec.Repository) 
 	if out, err := repository.Run(ctx, nil, "rev-parse", "HEAD"); err == nil {
 		state.Head = strings.TrimSpace(string(out))
 	}
-	status, err := repository.Run(ctx, nil, "status", "--porcelain=v2", "-z")
-	if err != nil {
-		return RepositoryState{}, fmt.Errorf("read repository status: %w", err)
-	}
-	state.Dirty = len(status) > 0
 	if out, err := repository.Run(ctx, nil, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err == nil {
 		state.Upstream = strings.TrimSpace(string(out))
 		if counts, countErr := repository.Run(ctx, nil, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"); countErr == nil {
@@ -978,15 +991,23 @@ func (s *Service) snapshot(ctx context.Context, repository *gitexec.Repository) 
 			}
 		}
 	}
-	state.Worktrees, err = app.NewWorktreeService(repository).List(ctx)
+	worktrees, err := app.NewWorktreeService(repository).List(ctx)
 	if err != nil {
 		return RepositoryState{}, err
 	}
+	state.Worktrees = worktrees
 	state.ProjectRoot = state.Root
 	if len(state.Worktrees) > 0 {
 		// Git always emits the main worktree first, even when the repository was
 		// opened through a linked worktree.
 		state.ProjectRoot = state.Worktrees[0].Path
+	}
+	// The worktree listing already ran `status` inside every worktree, including
+	// this one. Running it again here doubled the cost of a snapshot, and every
+	// mutation takes a snapshot before and after itself.
+	state.Dirty, err = worktreeDirtyState(ctx, repository, state)
+	if err != nil {
+		return RepositoryState{}, err
 	}
 	state.DefaultBranch = readDefaultBranch(ctx, repository, state.Branch)
 	state.Remotes = readRemotes(ctx, repository)

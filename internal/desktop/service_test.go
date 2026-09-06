@@ -1595,3 +1595,105 @@ func observeRepository(t *testing.T, repository string) repositoryObservation {
 		Worktrees: gitOutput(t, repository, "worktree", "list", "--porcelain"),
 	}
 }
+
+func gitCommandLogger(t *testing.T) (*gitexec.Runner, string) {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandLog := filepath.Join(t.TempDir(), "git-commands.log")
+	wrapper := filepath.Join(t.TempDir(), "git-wrapper")
+	wrapperSource := `#!/bin/sh
+printf '%s\n' "$*" >> "$TEST_COMMAND_LOG"
+exec "$TEST_REAL_GIT" "$@"
+`
+	if err := os.WriteFile(wrapper, []byte(wrapperSource), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_REAL_GIT", realGit)
+	t.Setenv("TEST_COMMAND_LOG", commandLog)
+	return &gitexec.Runner{Binary: wrapper}, commandLog
+}
+
+// The worktree listing already runs `status` inside every registered worktree,
+// including the viewed root. Asking again doubled the cost of a snapshot, and
+// every mutation snapshots before and after itself.
+func TestSnapshotReadsWorkingTreeStatusOncePerWorktree(t *testing.T) {
+	repository := createRepository(t)
+	runner, commandLog := gitCommandLogger(t)
+	service := NewService(runner)
+	t.Cleanup(func() { _ = service.Close() })
+
+	if err := os.WriteFile(commandLog, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := service.Open(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Worktrees) != 1 {
+		t.Fatalf("fixture worktrees = %d, want 1", len(state.Worktrees))
+	}
+	if got := strings.Count(readFile(t, commandLog), " status --porcelain=v2 -z"); got != 1 {
+		t.Fatalf("status commands per snapshot = %d, want one per worktree\n%s", got, readFile(t, commandLog))
+	}
+
+	writeFile(t, filepath.Join(repository, "internal", "search.go"), "package internal\n\nconst engine = \"dirty\"\n")
+	dirty, err := service.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dirty.Dirty {
+		t.Fatal("a modified working tree should be reported as dirty")
+	}
+}
+
+// The scope context holds the total commit count, which costs a full rev-list
+// walk. Without it on disk every relaunch repeated that walk even when the
+// page itself was already cached.
+func TestHistoryScopeSurvivesRestartThroughThePersistentCache(t *testing.T) {
+	repository := createRepository(t)
+	runner, commandLog := gitCommandLogger(t)
+	cacheDir := filepath.Join(t.TempDir(), "cache")
+
+	firstCache, err := OpenPersistentCache(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := NewServiceWithCache(runner, firstCache)
+	if _, err := first.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.History(context.Background(), HistoryRequest{Scope: "main", Limit: 1}); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	if err := firstCache.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondCache, err := OpenPersistentCache(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := NewServiceWithCache(runner, secondCache)
+	t.Cleanup(func() { _ = second.Close(); _ = secondCache.Close() })
+	if _, err := second.Open(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(commandLog, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := second.History(context.Background(), HistoryRequest{Scope: "main", Limit: 1})
+	if err != nil || len(restarted.Commits) != 1 {
+		t.Fatalf("read history after restart: commits=%d err=%v", len(restarted.Commits), err)
+	}
+	commands := readFile(t, commandLog)
+	if strings.Contains(commands, " rev-list --count ") {
+		t.Fatalf("a relaunch recounted the whole history instead of reading the persisted scope\n%s", commands)
+	}
+	if strings.Contains(commands, " log --author-date-order ") {
+		t.Fatalf("a relaunch re-read the history page instead of using the persisted page\n%s", commands)
+	}
+}
