@@ -39,6 +39,9 @@ vars:
   SUBGIT_DIR:
     sh: 'printf "%s" "${SUBGIT_DIR:-{{.ROOT_DIR}}/subgit}"'
   SUBGIT_SETUP: '{{.ROOT_DIR}}/testdata/subgit/setup.sh'
+  LARGE_FIXTURE:
+    sh: 'printf "%s" "${GITGIT_LARGE_FIXTURE:-$HOME/Library/Caches/GitGit/test-fixtures/kubernetes}"'
+  LARGE_FIXTURE_REMOTE: '{{.LARGE_FIXTURE_REMOTE | default "https://github.com/kubernetes/kubernetes.git"}}'
   DESKTOP_DIR: '{{.ROOT_DIR}}/apps/desktop'
   FRONTEND_DIR: '{{.ROOT_DIR}}/apps/desktop/frontend'
   VSCODE_DIR: '{{.ROOT_DIR}}/apps/vscode'
@@ -213,6 +216,24 @@ tasks:
     deps: [toolchain:macos]
     cmds:
       - 'sh "{{.SUBGIT_SETUP}}" reset "{{.SUBGIT_DIR}}"'
+
+  fixture:large:
+    desc: Clone the large read-performance fixture when it is missing.
+    deps: [toolchain:macos]
+    status:
+      - 'test -d "{{.LARGE_FIXTURE}}/.git"'
+    cmds:
+      - 'mkdir -p "$(dirname "{{.LARGE_FIXTURE}}")"'
+      - 'git clone --progress "{{.LARGE_FIXTURE_REMOTE}}" "{{.LARGE_FIXTURE}}"'
+
+  check:performance:
+    desc: Measure large-repository load times against the budget.
+    aliases: [check-performance]
+    deps: [toolchain:go]
+    env:
+      GITGIT_LARGE_FIXTURE: '{{.LARGE_FIXTURE}}'
+    cmds:
+      - '"{{.GO}}" test ./internal/desktop/ -run TestLargeRepositoryLoadBudget -count=1 -v'
 
   frontend:install:
     desc: Install frontend dependencies when package inputs change.

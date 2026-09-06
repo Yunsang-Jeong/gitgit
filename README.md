@@ -64,6 +64,13 @@ task dev:browser
 task check
 ```
 
+큰 저장소에서의 read 성능은 별도 gate가 담당한다. Fixture는 없을 때만 clone하며, fixture가 없으면 gate는 skip한다.
+
+```sh
+task fixture:large          # kubernetes, 약 1.6 GB
+task check:performance
+```
+
 Product code나 test를 변경할 때는 Wails browser bridge에서 대상 flow를 먼저 확인하고, 자동화 검증 뒤 같은 flow를 다시 확인한다. 상세 기준과 예외는 [Development Gate](docs/development.md)를 따른다. `task dev`와 `task dev-browser`는 `task dev:browser`의 alias다.
 
 Taskfile의 task는 macOS에서만 실행된다. Build는 현재 Mac의 architecture를 따르며, GUI 환경에서 npm 경로를 찾지 못하면 `task build NPM=/absolute/path/to/npm`처럼 지정할 수 있다.

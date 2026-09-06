@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: gate
 scope: development
-last_updated: 2026-08-14
+last_updated: 2026-09-07
 ---
 
 # Development and Browser Verification
@@ -85,6 +85,7 @@ Product code 또는 test를 변경하는 작업은 다음 순서를 따른다.
 - Project, worktree, branch, Search session 전환이 관련된 경우 선택과 결과가 올바르게 함께 바뀐다.
 - Browser 확인 뒤에도 targeted test와 정적 검증이 통과한다.
 - History/Search 최적화는 결과 동등성뿐 아니라 page당 `diff-tree --stdin` batch 수, 중복 count/metadata command 제거와 이전 request cancellation test를 함께 통과한다.
+- Repository open과 history read를 바꾸는 작업은 `task check:performance`의 load budget을 함께 통과한다.
 - 최종 보고에 browser URL, 확인한 flow, 사용한 repository 또는 fixture, 자동화 검증 결과를 남긴다.
 
 다음 항목만으로는 gate를 통과하지 않는다.
@@ -93,6 +94,29 @@ Product code 또는 test를 변경하는 작업은 다음 순서를 따른다.
 - Raw Vite URL에서 정적 UI만 확인
 - Mock screenshot이나 DOM snapshot만 확인
 - Unit test만 통과하고 Wails-exposed flow를 실행하지 않음
+
+## Large repository load budget
+
+Read 성능은 작은 fixture로는 드러나지 않는다. `internal/desktop`의 `TestLargeRepositoryLoadBudget`은 14만 commit 규모의 실제 저장소에서 repository open과 history read의 wall-clock을 재고 예산을 넘으면 실패한다.
+
+```sh
+task fixture:large          # 없을 때만 clone한다 (kubernetes, 약 1.6 GB)
+task check:performance
+```
+
+Fixture는 기본적으로 `~/Library/Caches/GitGit/test-fixtures/kubernetes`에 두며 `GITGIT_LARGE_FIXTURE`로 다른 경로를 지정할 수 있다.
+
+이 gate는 `task check`에 포함하지 않고 opt-in으로 둔다. 시간 측정에 의존하므로 machine이 바쁠 때 실행되면 변경과 무관한 이유로 실패하기 때문이다. `GITGIT_LARGE_FIXTURE`가 없거나 fixture가 없으면 실패가 아니라 skip한다.
+
+예산은 목표가 아니라 상한이며, 기준 machine에서 관측된 가장 느린 값의 약 2배로 잡았다. Commit마다 process를 하나 더 띄우거나 batch를 잃는 것 같은 algorithmic regression은 잡되, 평범한 hardware 편차로는 흔들리지 않게 하기 위한 값이다.
+
+| 구간 | 예산 | 환경 변수 |
+| --- | --- | --- |
+| Repository open | 2000 ms | `GITGIT_OPEN_BUDGET_MS` |
+| History 첫 page (100 commit) | 6000 ms | `GITGIT_FIRST_HISTORY_BUDGET_MS` |
+| History 이후 page | 3000 ms | `GITGIT_FURTHER_HISTORY_BUDGET_MS` |
+
+측정은 3회 반복해 **최솟값**을 사용한다. Noise는 시간을 더하기만 하므로, 상한을 판단할 때는 최솟값이 안정적인 답이다. 예산을 올릴 때는 반드시 근거가 되는 측정을 함께 남긴다.
 
 ## 예외와 실패 처리
 
