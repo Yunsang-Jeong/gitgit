@@ -219,3 +219,34 @@ test('commit editing remains disabled only while repository state is unavailable
   assert.equal(commitEditDisabledReason({ ...readyContext, projectSwitching: true }), 'Wait for the project switch to finish.')
   assert.equal(commitEditDisabledReason({ ...readyContext, worktreeSwitching: true }), 'Wait for the worktree switch to finish.')
 })
+
+test('a commit changed only by a file edit is still a review anchor', () => {
+  const commits = [
+    { commit: 'c', message: 'third', author: { name: 'A', email: 'a@example.com' }, date: '2026-01-03T00:00:00+09:00' },
+    { commit: 'b', message: 'second', author: { name: 'A', email: 'a@example.com' }, date: '2026-01-02T00:00:00+09:00' },
+    { commit: 'a', message: 'first', author: { name: 'A', email: 'a@example.com' }, date: '2026-01-01T00:00:00+09:00' },
+  ]
+  const fileEdits = new Map([['b', 'fingerprint-for-b']])
+
+  assert.equal(oldestAffectedOriginalIndex(commits, commits), null)
+  assert.equal(oldestAffectedOriginalIndex(commits, commits, fileEdits), 1)
+  assert.deepEqual(commitDraftChangedIDs(commits, commits, fileEdits), ['b'])
+  assert.deepEqual(commitDraftChangeKinds(commits, commits[1], [], fileEdits), ['files'])
+  assert.notEqual(commitDraftFingerprint(commits, fileEdits), commitDraftFingerprint(commits))
+})
+
+test('a file edit outside the reviewed range is refused instead of being dropped', () => {
+  const visible = [
+    { commit: 'c', message: 'third', author: { name: 'A', email: 'a@example.com' }, date: '2026-01-03T00:00:00+09:00' },
+    { commit: 'b', message: 'second', author: { name: 'A', email: 'a@example.com' }, date: '2026-01-02T00:00:00+09:00' },
+    { commit: 'a', message: 'first', author: { name: 'A', email: 'a@example.com' }, date: '2026-01-01T00:00:00+09:00' },
+  ]
+  const stack = [{ commit: 'b' }, { commit: 'c' }]
+
+  const withinRange = deriveRewriteStackDraft(visible, visible, stack, new Map([['b', 'edited']]))
+  assert.equal(withinRange.ok, true)
+
+  const outsideRange = deriveRewriteStackDraft(visible, visible, stack, new Map([['a', 'edited']]))
+  assert.equal(outsideRange.ok, false)
+  assert.equal(outsideRange.reason, 'changes-outside-rewrite-range')
+})

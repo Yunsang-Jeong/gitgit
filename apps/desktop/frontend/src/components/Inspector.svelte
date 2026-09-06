@@ -6,7 +6,7 @@
   import { formatDate } from '../lib/datetime'
   import { buildReviewLink } from '../lib/review-links'
   import { inspectorRefContext } from '../lib/remotes'
-  import type { Author, ChangedFilesView, CommitDetail, ContextMenuItem, FileChange, RemoteInfo, RepositoryTreeResponse, SearchResult } from '../lib/types'
+  import type { Author, ChangedFilesView, CommitDetail, CommitFileDraft, ContextMenuItem, FileChange, RemoteInfo, RepositoryTreeResponse, SearchResult } from '../lib/types'
 
   export let selected: CommitDetail | SearchResult | null
   export let fileRevision: string
@@ -30,6 +30,14 @@
   export let onSelectFile: (path: string) => Promise<CommitDetail | SearchResult | void>
   export let onAddFileSearch: (path: string) => void
   export let onLoadTree: (revision: string, directory: string) => Promise<RepositoryTreeResponse>
+  export let editFileDrafts: Map<string, CommitFileDraft> = new Map()
+  export let editFileLoading = ''
+  export let editFileError = ''
+  export let onLoadFileDraft: (path: string) => Promise<CommitFileDraft | null> = async () => null
+  export let onEditFile: (path: string, content: string) => void = () => undefined
+  export let onDeleteFile: (path: string) => void = () => undefined
+  export let onRestoreFile: (path: string) => void = () => undefined
+  export let onRevertFile: (path: string) => void = () => undefined
 
   type InspectorTab = 'changes' | 'files'
   type VisibleChangedNode = { node: ChangedFileTreeNode; depth: number }
@@ -55,6 +63,8 @@
   let copyToast = ''
   let copyToastTimer: ReturnType<typeof setTimeout> | undefined
   let contextMenu: { x: number; y: number; label: string; items: ContextMenuItem[]; targetPath: string } | null = null
+  let fileEditing = ''
+  let fileEditor: HTMLTextAreaElement | undefined
 
   const commitMessageEditorMinHeight = 25
   const commitMessageEditorMaxHeight = 180
@@ -75,6 +85,10 @@
       ? selected.diff
       : ''
   $: diffLines = addedAndDeletedLines(selectedFileDiff)
+  // A side row in All branches receives a null draft message, which is the
+  // existing signal that this commit is outside the editable rewrite range.
+  $: canEditFiles = editMode && !editDraftLocked && editDraftMessage !== null
+  $: diffFileDraft = diffFile ? editFileDrafts.get(diffFile.path) ?? null : null
   $: if (defaultChangedFilesView !== observedDefaultChangedFilesView) {
     observedDefaultChangedFilesView = defaultChangedFilesView
     changedFilesView = defaultChangedFilesView
@@ -266,6 +280,32 @@
     selectedFileDetail = null
     diffLoading = false
     popoverPosition = null
+    fileEditing = ''
+  }
+
+  async function beginFileEdit(): Promise<void> {
+    if (!canEditFiles || !diffFile) return
+    const path = diffFile.path
+    const draft = diffFileDraft ?? await onLoadFileDraft(path)
+    if (!draft || !draft.editable || diffFile?.path !== path) return
+    fileEditing = path
+    await tick()
+    fileEditor?.focus()
+  }
+
+  function editFileContent(event: Event): void {
+    if (!diffFile) return
+    onEditFile(diffFile.path, (event.currentTarget as HTMLTextAreaElement).value)
+  }
+
+  // Delete and restore act on the whole file, so leaving the editor keeps the
+  // popover showing the resulting state rather than a stale buffer.
+  async function requestFileAction(action: (path: string) => void): Promise<void> {
+    if (!canEditFiles || !diffFile) return
+    const path = diffFile.path
+    if (!(diffFileDraft ?? await onLoadFileDraft(path)) || diffFile?.path !== path) return
+    action(path)
+    fileEditing = ''
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
@@ -437,6 +477,7 @@
             >
               <span class="file-status status-{file.status[0]?.toLowerCase()}">{file.status[0]}</span>
               <span class="copy-target changed-file-path" title={fileLabel(file)}><span class="changed-file-path-head">{labelHead(fileLabel(file))}</span><span class="changed-file-path-tail">{labelTail(fileLabel(file))}</span></span>
+              {#if editFileDrafts.get(file.path)?.dirty}<small class="changed-file-draft">Edited</small>{/if}
               {#if isSearchMatch(file)}<small class="search-file-match">Match</small>{/if}
             </button>
           {/each}
@@ -480,6 +521,7 @@
                 <span class="tree-chevron-spacer"></span>
                 <span class="file-status status-{node.file.status[0]?.toLowerCase()}">{node.file.status[0]}</span>
                 <span class="copy-target" title={node.file.path}>{node.name}</span>
+                {#if editFileDrafts.get(node.file.path)?.dirty}<small class="changed-file-draft">Edited</small>{/if}
                 {#if isSearchMatch(node.file)}<small class="search-file-match">Match</small>{/if}
               </button>
             {/if}
@@ -510,9 +552,41 @@
       </div>
       <button class="diff-popover-close" type="button" aria-label="Close file changes" on:click={closeDiffPopover}>×</button>
     </header>
+    {#if canEditFiles}
+      <div class="diff-popover-actions">
+        {#if fileEditing === diffFile.path}
+          <button type="button" on:click={() => (fileEditing = '')}>Done</button>
+        {:else if diffFileDraft && !diffFileDraft.exists}
+          <span class="diff-popover-file-state">Deleted by this commit</span>
+        {:else}
+          <button type="button" disabled={editFileLoading === diffFile.path} on:click={() => void beginFileEdit()}>Edit</button>
+        {/if}
+        {#if diffFileDraft?.exists ?? true}
+          <button type="button" on:click={() => void requestFileAction(onDeleteFile)}>Delete</button>
+        {:else if diffFileDraft?.restorable}
+          <button type="button" on:click={() => void requestFileAction(onRestoreFile)}>Restore</button>
+        {/if}
+        {#if diffFileDraft?.dirty}
+          <button type="button" on:click={() => void requestFileAction(onRevertFile)}>Revert</button>
+        {/if}
+        {#if editFileLoading === diffFile.path}<span class="diff-popover-file-state">Loading file…</span>{/if}
+      </div>
+      {#if editFileError}<p class="diff-popover-file-error" role="alert">{editFileError}</p>{/if}
+    {/if}
     <div class="diff-popover-content">
-      {#if diffLoading}
+      {#if fileEditing === diffFile.path && diffFileDraft}
+        <textarea
+          class="commit-file-editor"
+          bind:this={fileEditor}
+          value={diffFileDraft.content}
+          spellcheck="false"
+          aria-label={`Edit ${diffFile.path}`}
+          on:input={editFileContent}
+        ></textarea>
+      {:else if diffLoading}
         <div class="diff-popover-state"><span class="empty-spinner"></span><strong>Loading changes…</strong></div>
+      {:else if diffFileDraft?.dirty}
+        <div class="diff-popover-state"><strong>{diffFileDraft.exists ? 'File content replaced in this draft' : 'File will be deleted by this commit'}</strong><span>Review and apply the rewrite to make this change, or use Revert to drop it.</span></div>
       {:else if diffLines.length === 0}
         <div class="diff-popover-state"><strong>No added or removed lines</strong><span>This file may only have been renamed, changed as binary data, or left unchanged by a merge.</span></div>
       {:else}

@@ -24,6 +24,7 @@
     type CommitDraftChangeKind,
     type TargetChainProjectionResult,
   } from './lib/commit-edit'
+  import { createFileDraft, fileDraftFingerprint, fileDraftsToEdits, markFileDraftDeleted, restoreFileDraft, revertFileDraft, updateFileDraftContent } from './lib/commit-file-edit'
   import { normalizeSearchBoundary } from './lib/datetime'
   import { visibleCommits } from './lib/history'
   import { cloneFilterPresets, defaultFilterLogic, defaultFilterPresets, limitFilterPresets, resolvePresetRules } from './lib/presets'
@@ -37,6 +38,7 @@
     ChangedFilesView,
     CommitDetail,
     CommitEditStack,
+    CommitFileDraft,
     CommitFilterRule,
     CommitFilterAction,
     CommitFilterField,
@@ -176,6 +178,9 @@
   let editApplying = false
   let editApprovalConfirmed = false
   let editReviewRequestID = 0
+  let editFileDrafts = new Map<string, Map<string, CommitFileDraft>>()
+  let editFileLoading = ''
+  let editFileError = ''
   let discoveringProjects = false
   let discoveryMessage = ''
   let appSettings: AppSettings = defaultAppSettings()
@@ -202,7 +207,10 @@
   $: groupedSearchResults = groupSearchResultsByCommit(results)
   $: selectedSearchResult = groupedSearchResults[selectedSearchIndex] ?? null
   $: selectedForInspector = detailOverride ?? historyDetail
-  $: editDraftChangedCommitIDs = commitDraftChangedIDs(editOriginalDisplayCommits, editDraftCommits)
+  $: editFileFingerprints = new Map(
+    [...editFileDrafts].map(([commitID, drafts]) => [commitID, fileDraftFingerprint(drafts.values())]),
+  )
+  $: editDraftChangedCommitIDs = commitDraftChangedIDs(editOriginalDisplayCommits, editDraftCommits, editFileFingerprints)
   $: editChangedCommitIDs = [...new Set([...editMovedCommitIDs, ...editDraftChangedCommitIDs])]
   $: editTargetCommitIDs = editTargetCommits.map((commit) => commit.commit)
   $: editRewriteOriginalCommits = editTargetsDefaultBranch ? editTargetCommits : editOriginalDisplayCommits
@@ -214,10 +222,10 @@
       editChangedCommitIDs,
     )
     : { ok: true, commits: editDraftCommits } satisfies TargetChainProjectionResult<CommitSummary>
-  $: editDraftFingerprint = commitDraftFingerprint(editDraftCommits)
+  $: editDraftFingerprint = commitDraftFingerprint(editDraftCommits, editFileFingerprints)
   $: editHasChanges = editChangedCommitIDs.length > 0
   $: editReviewDraft = editReviewStack && editTargetDraftProjection.ok
-    ? deriveRewriteStackDraft(editRewriteOriginalCommits, editTargetDraftProjection.commits, editReviewStack.commits)
+    ? deriveRewriteStackDraft(editRewriteOriginalCommits, editTargetDraftProjection.commits, editReviewStack.commits, editFileFingerprints)
     : null
   $: editReviewIsCurrent = Boolean(
     editReviewStack
@@ -236,7 +244,7 @@
       .filter((commit) => editReviewCommits.some((reviewCommit) => reviewCommit.commit === commit.commit))
       .map((commit) => ({
         commit,
-        kinds: commitDraftChangeKinds(editOriginalDisplayCommits, commit, editMovedCommitIDs),
+        kinds: commitDraftChangeKinds(editOriginalDisplayCommits, commit, editMovedCommitIDs, editFileFingerprints),
       } satisfies EditReviewChange))
       .filter((change) => change.kinds.length > 0)
     : []
@@ -636,6 +644,9 @@
     editTargetCommits = []
     editTargetsDefaultBranch = false
     editMovedCommitIDs = []
+    editFileDrafts = new Map()
+    editFileLoading = ''
+    editFileError = ''
   }
 
   function resetEditReview(): void {
@@ -679,7 +690,7 @@
     if (editTargetsDefaultBranch) {
       const nextChangedCommitIDs = [...new Set([
         ...nextMovedCommitIDs,
-        ...commitDraftChangedIDs(editOriginalDisplayCommits, next),
+        ...commitDraftChangedIDs(editOriginalDisplayCommits, next, editFileFingerprints),
       ])]
       const nextProjection = projectVisualDraftToTargetChain(
         editOriginalDisplayCommits,
@@ -730,11 +741,80 @@
     ))
   }
 
+  // File drafts are keyed by the commit the backend echoed back, never by the
+  // requested OID, so a late response can never land under the wrong commit.
+  function storeFileDraft(commitID: string, draft: CommitFileDraft): void {
+    const drafts = new Map(editFileDrafts.get(commitID) ?? [])
+    drafts.set(draft.path, draft)
+    editFileDrafts = new Map(editFileDrafts).set(commitID, drafts)
+    invalidateEditReview()
+  }
+
+  function editableFileDraft(commitID: string, path: string): CommitFileDraft | null {
+    if (editReviewing || editApplying || !isEditableEditCommit(commitID)) return null
+    return editFileDrafts.get(commitID)?.get(path) ?? null
+  }
+
+  async function loadCommitFileDraft(path: string): Promise<CommitFileDraft | null> {
+    const commitID = selectedEditCommit?.commit ?? ''
+    if (!commitID || !isEditableEditCommit(commitID) || editReviewing || editApplying) return null
+    const existing = editFileDrafts.get(commitID)?.get(path)
+    if (existing) return existing
+
+    editFileError = ''
+    editFileLoading = path
+    try {
+      const content = await api.commitFileContent(commitID, path)
+      if (content.commit !== commitID) return null
+      const draft = createFileDraft(content)
+      if (!draft.editable && !draft.restorable) {
+        editFileError = draft.reason || 'This file cannot be edited in a rewrite.'
+        return null
+      }
+      storeFileDraft(commitID, draft)
+      return draft
+    } catch (error) {
+      editFileError = errorText(error)
+      return null
+    } finally {
+      if (editFileLoading === path) editFileLoading = ''
+    }
+  }
+
+  function editCommitFile(path: string, content: string): void {
+    const commitID = selectedEditCommit?.commit ?? ''
+    const draft = editableFileDraft(commitID, path)
+    if (!draft) return
+    storeFileDraft(commitID, updateFileDraftContent(draft, content))
+  }
+
+  function deleteCommitFile(path: string): void {
+    const commitID = selectedEditCommit?.commit ?? ''
+    const draft = editableFileDraft(commitID, path)
+    if (!draft) return
+    storeFileDraft(commitID, markFileDraftDeleted(draft))
+  }
+
+  function restoreCommitFile(path: string): void {
+    const commitID = selectedEditCommit?.commit ?? ''
+    const draft = editableFileDraft(commitID, path)
+    if (!draft) return
+    storeFileDraft(commitID, restoreFileDraft(draft))
+  }
+
+  function revertCommitFile(path: string): void {
+    const commitID = selectedEditCommit?.commit ?? ''
+    const draft = editableFileDraft(commitID, path)
+    if (!draft) return
+    storeFileDraft(commitID, revertFileDraft(draft))
+  }
+
   function editReviewChangeLabel(kind: CommitDraftChangeKind): string {
     if (kind === 'reordered') return 'reordered'
     if (kind === 'message') return 'message edited'
     if (kind === 'author') return 'author edited'
-    return 'author date edited'
+    if (kind === 'author-date') return 'author date edited'
+    return 'files edited'
   }
 
   async function reviewEditDraft(): Promise<void> {
@@ -763,7 +843,7 @@
       rejectEditReview(reviewDraftMismatchMessage(projection.reason))
       return
     }
-    const anchorIndex = oldestAffectedOriginalIndex(editRewriteOriginalCommits, projection.commits)
+    const anchorIndex = oldestAffectedOriginalIndex(editRewriteOriginalCommits, projection.commits, editFileFingerprints)
     if (anchorIndex === null) {
       rejectEditReview(editTargetsDefaultBranch
         ? 'The draft does not change default-branch order or metadata. Move a default-branch commit relative to another default-branch commit, or edit its metadata.'
@@ -796,7 +876,7 @@
         rejectEditReview(reviewDraftMismatchMessage(currentProjection.reason))
         return
       }
-      const draft = deriveRewriteStackDraft(editRewriteOriginalCommits, currentProjection.commits, stack.commits)
+      const draft = deriveRewriteStackDraft(editRewriteOriginalCommits, currentProjection.commits, stack.commits, editFileFingerprints)
       if (!draft.ok) {
         rejectEditReview(reviewDraftMismatchMessage(draft.reason))
         return
@@ -851,7 +931,7 @@
       rejectEditReview(reviewDraftMismatchMessage(projection.reason))
       return
     }
-    const draft = deriveRewriteStackDraft(editRewriteOriginalCommits, projection.commits, stack.commits)
+    const draft = deriveRewriteStackDraft(editRewriteOriginalCommits, projection.commits, stack.commits, editFileFingerprints)
     if (!draft.ok) {
       rejectEditReview(reviewDraftMismatchMessage(draft.reason))
       return
@@ -870,11 +950,13 @@
         const authorChanged = original
           && (original.author.name !== commit.author.name || original.author.email !== commit.author.email)
         const dateChanged = original && original.date !== commit.date
+        const fileEdits = fileDraftsToEdits(editFileDrafts.get(commit.commit)?.values() ?? [])
         return {
           commit: commit.commit,
           message: commit.message,
           ...(authorChanged ? { author: { ...commit.author } } : {}),
           ...(dateChanged ? { author_date: commit.date } : {}),
+          ...(fileEdits.length > 0 ? { file_edits: fileEdits } : {}),
         }
       }),
     }
@@ -2201,6 +2283,14 @@
         onSelectFile={selectInspectorFile}
         onAddFileSearch={(path) => void addPatternSearch('file', path)}
         onLoadTree={loadRepositoryTree}
+        editFileDrafts={editFileDrafts.get(selectedCommit) ?? new Map()}
+        {editFileLoading}
+        {editFileError}
+        onLoadFileDraft={loadCommitFileDraft}
+        onEditFile={editCommitFile}
+        onDeleteFile={deleteCommitFile}
+        onRestoreFile={restoreCommitFile}
+        onRevertFile={revertCommitFile}
       />
       </div>
     {:else if navigatorView === 'worktrees' && repository}

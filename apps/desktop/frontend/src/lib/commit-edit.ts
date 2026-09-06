@@ -11,7 +11,18 @@ export type CommitDraft = {
   date: string
 }
 
-export type CommitDraftChangeKind = 'reordered' | 'message' | 'author' | 'author-date'
+export type CommitDraftChangeKind = 'reordered' | 'message' | 'author' | 'author-date' | 'files'
+
+// File edits are drafted per commit outside the commit rows, so every
+// comparison that answers "did this commit change?" has to be handed the file
+// draft fingerprints as well. A commit missing from the map has no file edits.
+export type CommitFileFingerprints = ReadonlyMap<string, string>
+
+const noFileFingerprints: CommitFileFingerprints = new Map()
+
+function fileFingerprintOf(fileFingerprints: CommitFileFingerprints, commitID: string): string {
+  return fileFingerprints.get(commitID) ?? ''
+}
 
 export type RewriteStackDraftResult<T extends CommitDraft> =
   | { ok: true; commits: T[] }
@@ -141,6 +152,7 @@ export function commitDraftChangedIDs<T extends {
 }>(
   originalCommits: T[],
   draftCommits: T[],
+  fileFingerprints: CommitFileFingerprints = noFileFingerprints,
 ): string[] {
   const originalByCommit = new Map(originalCommits.map((commit) => [commit.commit, commit]))
   return draftCommits
@@ -151,6 +163,7 @@ export function commitDraftChangedIDs<T extends {
         || original.author.name !== commit.author.name
         || original.author.email !== commit.author.email
         || original.date !== commit.date
+        || fileFingerprintOf(fileFingerprints, commit.commit) !== ''
     })
     .map((commit) => commit.commit)
 }
@@ -162,6 +175,7 @@ export function commitDraftChangeKinds<T extends CommitDraft>(
   originalCommits: T[],
   draftCommit: T,
   movedCommitIDs: string[],
+  fileFingerprints: CommitFileFingerprints = noFileFingerprints,
 ): CommitDraftChangeKind[] {
   const original = originalCommits.find((commit) => commit.commit === draftCommit.commit)
   if (!original) return []
@@ -173,19 +187,25 @@ export function commitDraftChangeKinds<T extends CommitDraft>(
     changes.push('author')
   }
   if (original.date !== draftCommit.date) changes.push('author-date')
+  if (fileFingerprintOf(fileFingerprints, draftCommit.commit) !== '') changes.push('files')
   return changes
 }
 
 // The fingerprint deliberately contains only data Edit Mode can rewrite today.
 // Comparing it after a review invalidates that review for a move, message,
-// author, or author-date change without reacting to unrelated display fields.
-export function commitDraftFingerprint<T extends CommitDraft>(commits: T[]): string {
+// author, author-date, or file change without reacting to unrelated display
+// fields.
+export function commitDraftFingerprint<T extends CommitDraft>(
+  commits: T[],
+  fileFingerprints: CommitFileFingerprints = noFileFingerprints,
+): string {
   return JSON.stringify(commits.map((commit) => [
     commit.commit,
     commit.message,
     commit.author.name,
     commit.author.email,
     commit.date,
+    fileFingerprintOf(fileFingerprints, commit.commit),
   ]))
 }
 
@@ -255,6 +275,7 @@ export function projectVisualDraftToTargetChain<T extends { commit: string }>(
 export function oldestAffectedOriginalIndex<T extends CommitDraft>(
   originalCommits: T[],
   draftCommits: T[],
+  fileFingerprints: CommitFileFingerprints = noFileFingerprints,
 ): number | null {
   const originalIndexes = commitIndexes(originalCommits)
   const draftIndexes = commitIndexes(draftCommits)
@@ -268,7 +289,7 @@ export function oldestAffectedOriginalIndex<T extends CommitDraft>(
     const originalIndex = originalIndexes.get(draft.commit)
     if (originalIndex === undefined) return null
     const original = originalCommits[originalIndex]
-    if (originalIndex !== draftIndex || !sameCommitDraft(original, draft)) {
+    if (originalIndex !== draftIndex || !sameCommitDraft(original, draft, fileFingerprints)) {
       oldestAffectedIndex = Math.max(oldestAffectedIndex, originalIndex)
     }
   }
@@ -284,6 +305,7 @@ export function deriveRewriteStackDraft<T extends CommitDraft, S extends { commi
   originalVisibleNewestFirst: T[],
   draftVisibleNewestFirst: T[],
   stackOldestFirst: S[],
+  fileFingerprints: CommitFileFingerprints = noFileFingerprints,
 ): RewriteStackDraftResult<T> {
   const originalIndexes = commitIndexes(originalVisibleNewestFirst)
   const draftIndexes = commitIndexes(draftVisibleNewestFirst)
@@ -312,7 +334,7 @@ export function deriveRewriteStackDraft<T extends CommitDraft, S extends { commi
   }
 
   for (let index = stackNewestFirst.length; index < originalVisibleNewestFirst.length; index += 1) {
-    if (!sameCommitDraft(originalVisibleNewestFirst[index], draftVisibleNewestFirst[index])) {
+    if (!sameCommitDraft(originalVisibleNewestFirst[index], draftVisibleNewestFirst[index], fileFingerprints)) {
       return { ok: false, reason: 'changes-outside-rewrite-range' }
     }
   }
@@ -329,12 +351,23 @@ function commitIndexes<T extends { commit: string }>(commits: T[]): Map<string, 
   return indexes
 }
 
-function sameCommitDraft<T extends CommitDraft>(left: T, right: T): boolean {
+// `left` is always the original commit, which carries no drafted file edits.
+// Any file fingerprint recorded for this commit therefore makes the draft
+// different even when every metadata field still matches. Without this the
+// anchor search would find no change for a file-only edit, and a file edit
+// outside the reviewed range would pass the range check and then be dropped
+// from the rewrite payload.
+function sameCommitDraft<T extends CommitDraft>(
+  left: T,
+  right: T,
+  fileFingerprints: CommitFileFingerprints,
+): boolean {
   return left.commit === right.commit
     && left.message === right.message
     && left.author.name === right.author.name
     && left.author.email === right.author.email
     && left.date === right.date
+    && fileFingerprintOf(fileFingerprints, right.commit) === ''
 }
 
 // Edit Mode starts from the currently visible history. A concrete rewrite
