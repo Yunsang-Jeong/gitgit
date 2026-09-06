@@ -21,6 +21,7 @@
     oldestAffectedOriginalIndex,
     projectVisualDraftToTargetChain,
     resolveEditTargetBranch,
+    rewriteProvenanceNoteError,
     type CommitDraftChangeKind,
     type TargetChainProjectionResult,
   } from './lib/commit-edit'
@@ -181,6 +182,8 @@
   let editFileDrafts = new Map<string, Map<string, CommitFileDraft>>()
   let editFileLoading = ''
   let editFileError = ''
+  let editProvenanceEnabled = false
+  let editProvenanceNote = ''
   let discoveringProjects = false
   let discoveryMessage = ''
   let appSettings: AppSettings = defaultAppSettings()
@@ -251,7 +254,8 @@
   $: editReviewVisibleChanges = editReviewDirectChanges.slice(0, 3)
   $: editReviewHiddenChangeCount = Math.max(0, editReviewDirectChanges.length - editReviewVisibleChanges.length)
   $: canReviewEditDraft = editModeOpen && editHasChanges && !editModePreparing && !editReviewing && !editApplying && !historyLoading && !historyLoadingMore
-  $: canApplyEditDraft = editReviewIsCurrent && editApprovalConfirmed && !editReviewing && !editApplying
+  $: editProvenanceNoteError = editProvenanceEnabled ? rewriteProvenanceNoteError(editProvenanceNote) : ''
+  $: canApplyEditDraft = editReviewIsCurrent && editApprovalConfirmed && !editReviewing && !editApplying && editProvenanceNoteError === ''
   $: selectedEditCommit = editModeOpen && editTargetCommitIDs.includes(selectedCommit)
     ? editDraftCommits.find((commit) => commit.commit === selectedCommit) ?? null
     : null
@@ -647,6 +651,8 @@
     editFileDrafts = new Map()
     editFileLoading = ''
     editFileError = ''
+    editProvenanceEnabled = false
+    editProvenanceNote = ''
   }
 
   function resetEditReview(): void {
@@ -943,8 +949,8 @@
       expected_head: stack.head,
       base: stack.base,
       confirm_default_branch: stack.default_branch_target && editApprovalConfirmed,
-      append_rewrite_provenance: false,
-      rewrite_provenance_note: '',
+      append_rewrite_provenance: editProvenanceEnabled,
+      rewrite_provenance_note: editProvenanceEnabled ? editProvenanceNote.trim() : '',
       commits: draft.commits.map((commit) => {
         const original = editRewriteOriginalCommits.find((candidate) => candidate.commit === commit.commit)
         const authorChanged = original
@@ -2204,6 +2210,28 @@
                 </div>
 
                 <p class="edit-mode-review-note">This rewrites local history only. Push is separate.</p>
+
+                <div class="edit-mode-provenance">
+                  <label class="edit-mode-provenance-toggle">
+                    <input type="checkbox" bind:checked={editProvenanceEnabled} disabled={editApplying} />
+                    <span>Record <code>rewritten from: &lt;source hash&gt;</code> in each replacement commit.</span>
+                  </label>
+                  {#if editProvenanceEnabled}
+                    <input
+                      class="edit-mode-provenance-note"
+                      type="text"
+                      bind:value={editProvenanceNote}
+                      disabled={editApplying}
+                      maxlength="600"
+                      placeholder="Optional note, one line"
+                      aria-label="Rewrite provenance note"
+                      aria-invalid={editProvenanceNoteError !== ''}
+                    />
+                    {#if editProvenanceNoteError}
+                      <p class="edit-mode-review-error" role="alert">{editProvenanceNoteError}</p>
+                    {/if}
+                  {/if}
+                </div>
 
                 {#if editReviewError}
                   <p class="edit-mode-review-error" role="alert">{editReviewError}</p>

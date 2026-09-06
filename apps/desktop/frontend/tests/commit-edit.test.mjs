@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { commitDraftChangeKinds, commitDraftChangedIDs, commitDraftFingerprint, commitEditDisabledReason, deriveRewriteStackDraft, directionalDropInsertionIndex, directlyMovedCommitIDs, moveCommitTo, oldestAffectedOriginalIndex, projectVisualDraftToTargetChain, resolveEditTargetBranch, stabilizeDragPreview } from '../src/lib/commit-edit.ts'
+import { commitDraftChangeKinds, commitDraftChangedIDs, commitDraftFingerprint, commitEditDisabledReason, deriveRewriteStackDraft, directionalDropInsertionIndex, directlyMovedCommitIDs, moveCommitTo, oldestAffectedOriginalIndex, projectVisualDraftToTargetChain, resolveEditTargetBranch, rewriteProvenanceNoteError, stabilizeDragPreview } from '../src/lib/commit-edit.ts'
 
 const readyContext = {
   hasRepository: true,
@@ -249,4 +249,17 @@ test('a file edit outside the reviewed range is refused instead of being dropped
   const outsideRange = deriveRewriteStackDraft(visible, visible, stack, new Map([['a', 'edited']]))
   assert.equal(outsideRange.ok, false)
   assert.equal(outsideRange.reason, 'changes-outside-rewrite-range')
+})
+
+test('a rewrite provenance note is rejected on the same rules as the backend', () => {
+  assert.equal(rewriteProvenanceNoteError(''), '')
+  assert.equal(rewriteProvenanceNoteError('  reordered before release  '), '')
+  assert.equal(rewriteProvenanceNoteError('a'.repeat(500)), '')
+  assert.match(rewriteProvenanceNoteError('a'.repeat(501)), /longer than 500/)
+  assert.match(rewriteProvenanceNoteError('first\nsecond'), /single line/)
+
+  // The backend counts runes, so a 500-character Korean note must pass where a
+  // byte or UTF-16 count would reject it.
+  assert.equal(rewriteProvenanceNoteError('한'.repeat(500)), '')
+  assert.match(rewriteProvenanceNoteError('한'.repeat(501)), /longer than 500/)
 })

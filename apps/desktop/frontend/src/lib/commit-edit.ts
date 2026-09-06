@@ -209,6 +209,19 @@ export function commitDraftFingerprint<T extends CommitDraft>(
   ]))
 }
 
+// Mirrors validateRewriteProvenanceNote so the note is rejected before Apply
+// rather than after the rewrite has been prepared. The backend re-validates.
+export const maximumRewriteProvenanceNote = 500
+
+export function rewriteProvenanceNoteError(note: string): string {
+  const trimmed = note.trim()
+  if ([...trimmed].length > maximumRewriteProvenanceNote) {
+    return `The note is longer than ${maximumRewriteProvenanceNote} characters.`
+  }
+  if (/[\r\n]/.test(trimmed)) return 'The note must be a single line.'
+  return ''
+}
+
 export function resolveEditTargetBranch(scope: string, allBranches: boolean, defaultBranch: string): string {
   return (allBranches ? defaultBranch : scope).trim()
 }

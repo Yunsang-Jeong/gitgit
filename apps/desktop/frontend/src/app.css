@@ -6687,3 +6687,49 @@ select:not([multiple]) {
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
+
+.edit-mode-provenance {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #1c2b32;
+}
+
+.edit-mode-provenance-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #b7c7ce;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--font-micro);
+}
+
+.edit-mode-provenance-toggle code {
+  color: #8fa8b3;
+  font-family: var(--font-mono);
+}
+
+.edit-mode-provenance-note {
+  width: 100%;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid #29424c;
+  border-radius: 4px;
+  background: #0e191f;
+  color: #d1dce0;
+  font-family: var(--font-sans);
+  font-size: var(--font-micro);
+}
+
+.edit-mode-provenance-note:focus {
+  border-color: #3d798f;
+  outline: none;
+}
+
+.edit-mode-provenance-note[aria-invalid='true'] {
+  border-color: #8f4d5c;
+}
