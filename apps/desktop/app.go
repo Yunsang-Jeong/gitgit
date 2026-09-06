@@ -415,6 +415,55 @@ func (a *DesktopApp) RemoveMergedWorktrees(paths []string) (desktopcore.Reposito
 	return a.service.RemoveMergedWorktrees(a.appContext(), paths)
 }
 
+func (a *DesktopApp) CreateWorktree(request desktopcore.CreateWorktreeRequest) (desktopcore.WorktreeMutationResult, error) {
+	return a.service.CreateWorktree(a.appContext(), request)
+}
+
+func (a *DesktopApp) MoveWorktree(request desktopcore.MoveWorktreeRequest) (desktopcore.WorktreeMutationResult, error) {
+	return a.service.MoveWorktree(a.appContext(), request)
+}
+
+func (a *DesktopApp) SetWorktreeSparseDirectories(path string, directories []string) (desktopcore.WorktreeMutationResult, error) {
+	return a.service.SetWorktreeSparseDirectories(a.appContext(), path, directories)
+}
+
+func (a *DesktopApp) ExpandWorktreeSparseDirectories(path string, directories []string) (desktopcore.WorktreeMutationResult, error) {
+	return a.service.ExpandWorktreeSparseDirectories(a.appContext(), path, directories)
+}
+
+func (a *DesktopApp) ContractWorktreeSparseDirectories(path string, directories []string) (desktopcore.WorktreeMutationResult, error) {
+	return a.service.ContractWorktreeSparseDirectories(a.appContext(), path, directories)
+}
+
+func (a *DesktopApp) DisableWorktreeSparseCheckout(path string) (desktopcore.WorktreeMutationResult, error) {
+	return a.service.DisableWorktreeSparseCheckout(a.appContext(), path)
+}
+
+// Prefills the create dialog beside the project rather than inside it, which
+// is where a linked worktree usually belongs.
+func (a *DesktopApp) SuggestedWorktreeParentDirectory() (string, error) {
+	state, err := a.service.Current(a.appContext())
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(state.ProjectRoot), nil
+}
+
+// Deliberately not guarded by registeredWorktreePath: the whole point is to
+// name a directory that is not a worktree yet.
+func (a *DesktopApp) ChooseWorktreeParentDirectory(current string) (string, error) {
+	defaultDirectory := strings.TrimSpace(current)
+	if defaultDirectory == "" {
+		if suggested, err := a.SuggestedWorktreeParentDirectory(); err == nil {
+			defaultDirectory = suggested
+		}
+	}
+	return runtime.OpenDirectoryDialog(a.appContext(), runtime.OpenDialogOptions{
+		Title:            "Choose the directory to create the worktree in",
+		DefaultDirectory: defaultDirectory,
+	})
+}
+
 func (a *DesktopApp) repositoryFile(path string) (string, error) {
 	_, resolved, err := a.repositoryFileContext(path)
 	return resolved, err

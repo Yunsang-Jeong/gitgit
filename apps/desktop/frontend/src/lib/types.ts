@@ -39,6 +39,30 @@ export interface WorktreeInfo {
   sparse: SparseState
 }
 
+export interface WorktreeLocation {
+  parent_directory: string
+  name: string
+}
+
+export interface CreateWorktreeRequest {
+  location: WorktreeLocation
+  revision: string
+  new_branch: string
+  detach: boolean
+  sync: string
+}
+
+export interface MoveWorktreeRequest {
+  path: string
+  location: WorktreeLocation
+}
+
+export interface WorktreeMutationResult {
+  state: RepositoryState
+  path: string
+  warnings?: string[]
+}
+
 export interface RepositoryState {
   root: string
   project_root: string

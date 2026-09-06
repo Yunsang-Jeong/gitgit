@@ -1,4 +1,7 @@
-import type { CommitDetail, CommitEditStack, CommitEditTarget, CommitFileContent, HistoryBranchesResponse, HistoryRequest, HistoryResponse, ProjectDiscoveryResult, ProjectPruneResult, RegisteredProject, RemoteBranchesResponse, RemoteSyncResult, RepositoryState, RepositoryTreeResponse, RewriteCommitsRequest, RewriteCommitsResponse, SearchProgress, SearchRequest, SearchResponse } from './types'
+import type {
+  CreateWorktreeRequest,
+  MoveWorktreeRequest,
+  WorktreeMutationResult, CommitDetail, CommitEditStack, CommitEditTarget, CommitFileContent, HistoryBranchesResponse, HistoryRequest, HistoryResponse, ProjectDiscoveryResult, ProjectPruneResult, RegisteredProject, RemoteBranchesResponse, RemoteSyncResult, RepositoryState, RepositoryTreeResponse, RewriteCommitsRequest, RewriteCommitsResponse, SearchProgress, SearchRequest, SearchResponse } from './types'
 
 type Backend = {
   Version: () => Promise<string>
@@ -34,6 +37,14 @@ type Backend = {
   OpenWorktreeInIDE: (path: string, ide: string) => Promise<void>
   RemoveMergedWorktree: (path: string) => Promise<RepositoryState>
   RemoveMergedWorktrees: (paths: string[]) => Promise<RepositoryState>
+  CreateWorktree: (request: CreateWorktreeRequest) => Promise<WorktreeMutationResult>
+  MoveWorktree: (request: MoveWorktreeRequest) => Promise<WorktreeMutationResult>
+  SetWorktreeSparseDirectories: (path: string, directories: string[]) => Promise<WorktreeMutationResult>
+  ExpandWorktreeSparseDirectories: (path: string, directories: string[]) => Promise<WorktreeMutationResult>
+  ContractWorktreeSparseDirectories: (path: string, directories: string[]) => Promise<WorktreeMutationResult>
+  DisableWorktreeSparseCheckout: (path: string) => Promise<WorktreeMutationResult>
+  SuggestedWorktreeParentDirectory: () => Promise<string>
+  ChooseWorktreeParentDirectory: (current: string) => Promise<string>
 }
 
 declare global {
@@ -96,4 +107,12 @@ export const api = {
   openWorktreeInIDE: (path: string, ide: string) => backend().OpenWorktreeInIDE(path, ide),
   removeMergedWorktree: (path: string) => backend().RemoveMergedWorktree(path),
   removeMergedWorktrees: (paths: string[]) => backend().RemoveMergedWorktrees(paths),
+  createWorktree: (request: CreateWorktreeRequest) => backend().CreateWorktree(request),
+  moveWorktree: (request: MoveWorktreeRequest) => backend().MoveWorktree(request),
+  setWorktreeSparseDirectories: (path: string, directories: string[]) => backend().SetWorktreeSparseDirectories(path, directories),
+  expandWorktreeSparseDirectories: (path: string, directories: string[]) => backend().ExpandWorktreeSparseDirectories(path, directories),
+  contractWorktreeSparseDirectories: (path: string, directories: string[]) => backend().ContractWorktreeSparseDirectories(path, directories),
+  disableWorktreeSparseCheckout: (path: string) => backend().DisableWorktreeSparseCheckout(path),
+  suggestedWorktreeParentDirectory: () => backend().SuggestedWorktreeParentDirectory(),
+  chooseWorktreeParentDirectory: (current: string) => backend().ChooseWorktreeParentDirectory(current),
 }
