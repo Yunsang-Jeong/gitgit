@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import WorktreeCard from './WorktreeCard.svelte'
+  import { removalBlocker, selectedBlocker, type WorktreeActionContext } from '../lib/worktree-actions'
   import type { RepositoryState, WorktreeInfo } from '../lib/types'
 
   export let repository: RepositoryState
@@ -25,8 +26,13 @@
   $: unmergedWorktrees = orderedWorktrees.filter((worktree) => worktree.path !== activeProjectRoot && !worktree.merged_into_default)
   $: selectablePaths = new Set(orderedWorktrees.filter((worktree) => worktree.path !== activeProjectRoot).map((worktree) => worktree.path))
   $: selectedWorktrees = orderedWorktrees.filter((worktree) => selectedPaths.includes(worktree.path))
-  $: removableWorktrees = orderedWorktrees.filter((worktree) => removalBlocker(worktree) === '')
-  $: removalReason = selectedRemovalBlocker(selectedWorktrees)
+  $: actionContext = {
+    activeProjectRoot,
+    root: repository.root,
+    defaultBranch: repository.default_branch,
+  } satisfies WorktreeActionContext
+  $: removableWorktrees = orderedWorktrees.filter((worktree) => removalBlocker(worktree, actionContext) === '')
+  $: removalReason = selectedBlocker(selectedWorktrees, actionContext, removalBlocker)
   $: if (selectedPaths.some((path) => !selectablePaths.has(path))) {
     selectedPaths = selectedPaths.filter((path) => selectablePaths.has(path))
   }
@@ -59,26 +65,6 @@
     const leftName = left.detached ? `detached/${left.head}` : left.branch || left.path
     const rightName = right.detached ? `detached/${right.head}` : right.branch || right.path
     return leftName.localeCompare(rightName, undefined, { numeric: true, sensitivity: 'base' }) || left.path.localeCompare(right.path)
-  }
-
-  function removalBlocker(worktree: WorktreeInfo): string {
-    if (worktree.path === activeProjectRoot) return 'Main worktree'
-    if (worktree.path === repository.root) return 'Switch to Main first'
-    if (worktree.detached || !worktree.branch) return 'Detached worktree'
-    if (worktree.branch === repository.default_branch) return 'Default branch'
-    if (worktree.locked) return 'Locked worktree'
-    if (worktree.dirty) return 'Local changes present'
-    if (!worktree.merged_into_default) return `Not merged into ${repository.default_branch}`
-    return ''
-  }
-
-  function selectedRemovalBlocker(worktrees: WorktreeInfo[]): string {
-    if (worktrees.length === 0) return 'Select one or more worktrees'
-    for (const worktree of worktrees) {
-      const reason = removalBlocker(worktree)
-      if (reason) return `${worktree.branch || 'detached'}: ${reason}`
-    }
-    return ''
   }
 
   function setWorktreeSelected(worktree: WorktreeInfo, checked: boolean, range = false): void {
@@ -119,7 +105,7 @@
   }
 
   async function requestRemoval(worktrees: WorktreeInfo[]): Promise<void> {
-    if (worktrees.length === 0 || worktrees.some((worktree) => removalBlocker(worktree))) return
+    if (worktrees.length === 0 || worktrees.some((worktree) => removalBlocker(worktree, actionContext))) return
     actionsOpen = false
     pendingRemoval = [...worktrees]
     await tick()
