@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: commit
-last_updated: 2026-08-08
+last_updated: 2026-09-07
 ---
 
 # Commit Module
@@ -125,7 +125,7 @@ Edit Mode에서는 **Commit 순서와 message, Author, Author date draft를 loca
 - Branch scope에서는 각 commit row 전체를 click-and-drag하여 다른 row의 위 또는 아래에 drop할 수 있다. `All branches`에서는 default branch target row만 drag/drop 대상이며, side branch row는 read-only다. 별도 drag handle, 순번, 이동 안내 행은 추가하지 않는다.
 - Drag 중 pointer가 이동 방향의 target row 안으로 30% 들어오면 주변 row가 위 또는 아래로 짧게 이동해 draft 위치를 미리 보여 준다. Preview reflow가 pointer 아래의 row를 바꿔도 작은 pointer 이동 안에서는 기존 preview를 유지해 왕복 animation을 막는다. Drop은 그 preview를 확정할 뿐이며, Graph는 animation 동안 잠시 숨겼다가 새 geometry와 함께 다시 표시한다.
 - 사용자가 직접 옮긴 commit row만 주황/노랑 background와 left accent로 표시한다. 다른 행이 밀려 위치가 달라진 것만으로는 표시하지 않으며, 원래 위치로 돌아오면 강조가 사라진다. 옮긴 row가 동시에 선택된 경우에는 주황 background를 유지하고 left accent만 blue로 바꾼다.
-- Row를 클릭하면 기존처럼 오른쪽 Inspector에서 해당 commit의 metadata, changed files와 diff를 읽는다. Edit Mode에서는 Inspector의 commit 제목, Author, Author date를 클릭해 그 자리에서 editor로 전환할 수 있다. Changed files와 diff는 현재도 read-only이며, 파일 내용 수정·삭제·복원 UI는 아직 제공하지 않는다. message textarea는 줄바꿈과 wrapping에 맞춰 최대 180px까지 자동으로 높이를 늘리며, 그 이상은 내부 scroll을 사용한다. Author date는 timezone을 보존하는 ISO 8601 문자열로 입력한다. Review 전에는 원문과 직접 달라진 commit hash 옆에, Review 후에는 replacement가 생길 verified range 전체의 hash 옆에 `→ will be changed`를 표시한다.
+- Row를 클릭하면 기존처럼 오른쪽 Inspector에서 해당 commit의 metadata, changed files와 diff를 읽는다. Edit Mode에서는 Inspector의 commit 제목, Author, Author date를 클릭해 그 자리에서 editor로 전환할 수 있다. Changed files의 diff popover는 Edit Mode에서 해당 commit이 실제로 바꾼 파일을 `Edit`, `Delete`, `Restore`, `Revert`로 조정할 수 있는 자리로 바뀐다. message textarea는 줄바꿈과 wrapping에 맞춰 최대 180px까지 자동으로 높이를 늘리며, 그 이상은 내부 scroll을 사용한다. Author date는 timezone을 보존하는 ISO 8601 문자열로 입력한다. Review 전에는 원문과 직접 달라진 commit hash 옆에, Review 후에는 replacement가 생길 verified range 전체의 hash 옆에 `→ will be changed`를 표시한다.
 - Inspector 상단의 worktree action도 mode 동안은 실행하지 못한다.
 - `Exit Edit Mode`를 누르면 아직 적용하지 않은 local reorder draft를 버리고, 보던 Commit Page의 history로 돌아간다.
 
@@ -138,7 +138,22 @@ Edit Mode에서는 **Commit 순서와 message, Author, Author date draft를 loca
 
 Review가 완료된 뒤 draft를 한 글자라도 수정하거나 다시 drag하면 Review와 approval은 즉시 무효가 된다. Review sheet는 `Verified range: base → current HEAD`, 직접 수정한 commit의 변경 종류, replacement hash를 받는 전체 commit 수와 dependent replacement 수를 보여 준다. 전체 rewrite stack을 commit별 hash로 나열하지 않는다. Review가 유효할 때만 acknowledgement checkbox가 보이며, default branch는 default-branch history rewrite임을 명시한다. acknowledgement 이후 `Apply N`은 temporary worktree에서 replay하고, original `HEAD` backup ref를 만든 뒤 lease로 branch를 옮긴다. Author와 Author date override도 이 payload에 포함된다. Apply 중에는 draft editing과 Exit Edit Mode를 잠그며, 성공하면 history를 refresh하고 Edit Mode를 종료한다. 실패하면 local draft를 유지하고 review sheet에 오류를 남긴다.
 
-현재 table edit flow는 file 수정·삭제·복원과 provenance checkbox를 아직 노출하지 않는다. 향후 optional provenance를 적용할 때 replacement commit에는 `rewritten from: <source hash>`를 기록하며, 과거 `GitGit-Rewritten-From:` trailer는 재작성 시 새 형식으로 교체한다.
+### File 수정·삭제·복원
+
+Edit Mode의 Inspector는 선택한 commit이 이미 바꾼 file만 편집 대상으로 노출한다. 이는 rewrite backend가 그 commit의 changed-file 목록 밖 경로를 거부하는 것과 같은 경계다.
+
+- `Edit`는 diff 자리를 그 commit 시점 file 내용 전체를 담은 editor로 바꾼다. 편집은 patch가 아니라 **전체 내용 치환**이다.
+- `Delete`는 replacement commit이 그 경로를 삭제하게 만든다. Commit이 원래 삭제하는 경로에는 first parent의 내용을 되살리는 `Restore`를 제공한다.
+- `Revert`는 그 file draft를 원래 상태로 되돌린다. 원래 내용·삭제 상태와 같아지면 draft는 변경으로 세지 않는다.
+- Draft가 있는 file은 목록에서 `Edited`로 표시한다. Draft는 Edit Mode를 벗어나거나 Apply가 성공할 때만 버려지며, message·author·author date를 고치는 동안에는 유지된다.
+- Binary, 2 MiB 초과, regular blob이 아닌 file은 편집하지 않고 이유를 표시한다. Rename row는 새 경로만 편집 대상으로 노출한다.
+- File 편집은 재정렬을 마친 **새 위치에서** 적용되므로, 같은 file을 만지는 뒤 commit이 있으면 replay가 충돌로 실패할 수 있다.
+
+File 편집도 reorder, message, author와 똑같이 Review를 무효화하며, review sheet에는 `files edited`로 표시한다.
+
+### Provenance opt-in
+
+Review sheet의 checkbox를 켜면 replacement commit에 `rewritten from: <source hash>`를 기록한다. 한 줄, 500자 이하의 선택적 note를 함께 남길 수 있으며 이는 `GitGit-Rewrite-Note:` trailer가 된다. 과거 `GitGit-Rewritten-From:` trailer는 재작성 시 새 형식으로 교체한다.
 
 ## 현재 제공하지 않는 것
 
@@ -146,6 +161,5 @@ Review가 완료된 뒤 draft를 한 글자라도 수정하거나 다시 drag하
 - Merge commit reorder
 - Commit split/squash/fixup 전용 workflow
 - default branch 이외의 All branches target 선택 UI
-- File 수정·삭제·복원 UI와 provenance opt-in UI
 - Remote push와 force push
 - Backup ref 정리 UI

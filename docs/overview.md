@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: overview
 scope: project
-last_updated: 2026-08-15
+last_updated: 2026-09-07
 ---
 
 # GitGit Overview
@@ -42,7 +42,7 @@ GitGit이 우선하는 방향은 세 가지다.
 - Default branch를 branch list의 첫 항목으로 배치한다.
 - Side branch는 default branch와의 branch point까지만 먼저 보여주고, 사용자가 명시적으로 이전 history를 확장한 뒤 scroll loading을 재개한다.
 - Commit Preset, Inspector, changed-file list/tree와 diff를 제공한다. Preset은 보이는 행이 한 batch를 채울 때까지 history를 점진적으로 확장하며 탐색 조건과 범위를 표시한다.
-- Checked-out local branch의 linear first-parent range에 한해 commit reorder와 message, author, author date edit를 제공한다. Changed-file list와 diff는 read-only이며 file 수정·삭제·복원 UI는 아직 제공하지 않는다.
+- Checked-out local branch의 linear first-parent range에 한해 commit reorder와 message, author, author date edit를 제공한다. 그 commit이 이미 바꾼 file은 Edit Mode에서 내용 치환·삭제·복원할 수 있으며, replacement commit에 `rewritten from:` provenance를 남기는 opt-in을 제공한다.
 
 상세 규칙은 [Commit](commit.md)을 따른다.
 
