@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	cacheBundleIdentifier = "com.wails.gitgit"
 	cacheDirectoryVersion = "cache-v1"
 )
 
@@ -27,11 +26,11 @@ type PersistentCache struct {
 }
 
 func DefaultPersistentCachePath() (string, error) {
-	root, err := os.UserCacheDir()
+	root, err := CacheDirectory()
 	if err != nil {
 		return "", fmt.Errorf("locate user cache directory: %w", err)
 	}
-	return filepath.Join(root, cacheBundleIdentifier, cacheDirectoryVersion), nil
+	return filepath.Join(root, cacheDirectoryVersion), nil
 }
 
 func OpenDefaultPersistentCache() (*PersistentCache, error) {

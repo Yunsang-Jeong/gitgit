@@ -1488,11 +1488,11 @@ func createCanonicalSubgitFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cacheRoot, err := os.UserCacheDir()
+	cacheRoot, err := CacheDirectory()
 	if err != nil {
 		t.Fatalf("resolve test fixture cache: %v", err)
 	}
-	repository := filepath.Join(cacheRoot, "GitGit", "test-fixtures", "subgit-v4-100")
+	repository := filepath.Join(cacheRoot, "test-fixtures", "subgit-v4-100")
 	if err := os.MkdirAll(filepath.Dir(repository), 0o755); err != nil {
 		t.Fatalf("create test fixture cache directory: %v", err)
 	}

@@ -104,7 +104,7 @@ task fixture:large          # 없을 때만 clone한다 (kubernetes, 약 1.6 GB)
 task check:performance
 ```
 
-Fixture는 기본적으로 `~/Library/Caches/GitGit/test-fixtures/kubernetes`에 두며 `GITGIT_LARGE_FIXTURE`로 다른 경로를 지정할 수 있다.
+Fixture는 기본적으로 `$XDG_CACHE_HOME/gitgit/test-fixtures/kubernetes`(기본 `~/.cache/gitgit/`)에 두며 `GITGIT_LARGE_FIXTURE`로 다른 경로를 지정할 수 있다.
 
 이 gate는 `task check`에 포함하지 않고 opt-in으로 둔다. 시간 측정에 의존하므로 machine이 바쁠 때 실행되면 변경과 무관한 이유로 실패하기 때문이다. `GITGIT_LARGE_FIXTURE`가 없거나 fixture가 없으면 실패가 아니라 skip한다.
 

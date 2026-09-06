@@ -40,7 +40,7 @@ vars:
     sh: 'printf "%s" "${SUBGIT_DIR:-{{.ROOT_DIR}}/subgit}"'
   SUBGIT_SETUP: '{{.ROOT_DIR}}/testdata/subgit/setup.sh'
   LARGE_FIXTURE:
-    sh: 'printf "%s" "${GITGIT_LARGE_FIXTURE:-$HOME/Library/Caches/GitGit/test-fixtures/kubernetes}"'
+    sh: 'printf "%s" "${GITGIT_LARGE_FIXTURE:-${XDG_CACHE_HOME:-$HOME/.cache}/gitgit/test-fixtures/kubernetes}"'
   LARGE_FIXTURE_REMOTE: '{{.LARGE_FIXTURE_REMOTE | default "https://github.com/kubernetes/kubernetes.git"}}'
   DESKTOP_DIR: '{{.ROOT_DIR}}/apps/desktop'
   FRONTEND_DIR: '{{.ROOT_DIR}}/apps/desktop/frontend'
@@ -51,7 +51,7 @@ vars:
   INSTALLED_APP: '{{.INSTALL_DIR}}/{{.APP_NAME}}.app'
   INSTALL_STAGING_APP: '{{.INSTALL_DIR}}/.{{.APP_NAME}}.app.installing'
   CACHE_DIR:
-    sh: 'printf "%s" "${CACHE_DIR:-$HOME/Library/Caches/com.wails.gitgit}"'
+    sh: 'printf "%s" "${CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/gitgit}"'
   HOST_ARCH:
     sh: 'uname -m'
 

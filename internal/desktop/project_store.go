@@ -32,11 +32,11 @@ type ProjectStore struct {
 }
 
 func NewDefaultProjectStore() (*ProjectStore, error) {
-	configDirectory, err := os.UserConfigDir()
+	configDirectory, err := ConfigDirectory()
 	if err != nil {
 		return nil, fmt.Errorf("locate user config directory: %w", err)
 	}
-	return NewProjectStore(filepath.Join(configDirectory, "GitGit", "projects.json")), nil
+	return NewProjectStore(filepath.Join(configDirectory, "projects.json")), nil
 }
 
 func NewProjectStore(path string) *ProjectStore {

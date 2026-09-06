@@ -130,8 +130,8 @@ Read 성능은 system Git 경계를 유지하면서 process 수와 중복 parsin
 
 | 상태 | 위치 | 수명 |
 | --- | --- | --- |
-| Registered projects와 favorite | `~/Library/Application Support/GitGit/projects.json` | application 재시작 이후에도 유지 |
-| Repository history metadata cache | `~/Library/Caches/com.wails.gitgit/cache-v1` | disposable, 삭제 후 재생성 |
+| Registered projects와 favorite | `$XDG_CONFIG_HOME/gitgit/projects.json` (기본 `~/.config/gitgit/`) | application 재시작 이후에도 유지 |
+| Repository history metadata cache | `$XDG_CACHE_HOME/gitgit/cache-v1` (기본 `~/.cache/gitgit/`) | disposable, 삭제 후 재생성 |
 | UI settings | WebView `localStorage`의 `gitgit.settings.v1` | local application data가 유지되는 동안 |
 | Inspector pane width | WebView `localStorage`의 `gitgit.pane-widths.v1` | local application data가 유지되는 동안 |
 | Search sessions | Frontend process memory | application 종료 시 삭제 |
