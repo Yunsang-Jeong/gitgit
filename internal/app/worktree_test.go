@@ -107,3 +107,37 @@ func TestSparseExpandContractProtectsDirtyPaths(t *testing.T) {
 		t.Fatalf("dirty file was lost: %v", err)
 	}
 }
+
+// SparseSet skips protectDirtyPaths when sparse checkout is still disabled, so
+// the very first selection is the one transition that can hide a dirty file
+// without any warning. CheckSparseRules exists to close that gap.
+func TestCheckSparseRulesRejectsDirtyPathsBeforeSparseIsEnabled(t *testing.T) {
+	t.Parallel()
+	root := newTestRepository(t)
+	writeTestFile(t, root, "a/a.txt", "a\n")
+	writeTestFile(t, root, "b/b.txt", "b\n")
+	gitTestCommand(t, root, "add", ".")
+	gitTestCommand(t, root, "commit", "-m", "tree")
+
+	repo, err := gitexec.OpenRepository(context.Background(), gitexec.NewRunner(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewWorktreeService(repo)
+
+	writeTestFile(t, root, "b/local.txt", "do not hide\n")
+	if err := service.CheckSparseRules(context.Background(), root, []string{"a"}); err == nil {
+		t.Fatal("expected a dirty path outside the new selection to be rejected")
+	} else if code := appErrorCode(err); code != "dirty_paths_outside_sparse" {
+		t.Fatalf("error code = %q, want %q", code, "dirty_paths_outside_sparse")
+	}
+
+	// The probe must not touch the checkout, and a selection that keeps the
+	// dirty path visible stays allowed.
+	if _, statErr := os.Stat(filepath.Join(root, "b/local.txt")); statErr != nil {
+		t.Fatalf("dirty file was lost by the probe: %v", statErr)
+	}
+	if err := service.CheckSparseRules(context.Background(), root, []string{"a", "b"}); err != nil {
+		t.Fatalf("selection covering the dirty path should be allowed: %v", err)
+	}
+}

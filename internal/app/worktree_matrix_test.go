@@ -215,6 +215,31 @@ func TestWorktreeValidationMatrix(t *testing.T) {
 			return err
 		}, code: "invalid_sparse_directory"},
 		{name: "newline sparse directory", run: func() error { _, err := service.SparseSet(context.Background(), root, []string{"a\nb"}); return err }, code: "invalid_sparse_directory"},
+		{name: "dashed add path", run: func() error {
+			_, err := service.Add(context.Background(), AddWorktreeOptions{Path: "--force", Sync: "none"})
+			return err
+		}, code: "invalid_arguments"},
+		{name: "dashed new branch", run: func() error {
+			_, err := service.Add(context.Background(), AddWorktreeOptions{Path: "unused", NewBranch: "-b", Sync: "none"})
+			return err
+		}, code: "invalid_arguments"},
+		{name: "dashed start point", run: func() error {
+			_, err := service.Add(context.Background(), AddWorktreeOptions{Path: "unused", Revision: "--all", Sync: "none"})
+			return err
+		}, code: "invalid_arguments"},
+		{name: "newline add path", run: func() error {
+			_, err := service.Add(context.Background(), AddWorktreeOptions{Path: "linked\nworktree", Sync: "none"})
+			return err
+		}, code: "invalid_arguments"},
+		{name: "dashed move source", run: func() error { _, err := service.Move(context.Background(), "-x", "destination"); return err }, code: "invalid_worktree_path"},
+		{name: "NUL move destination", run: func() error {
+			_, err := service.Move(context.Background(), "source", "destination\x00")
+			return err
+		}, code: "invalid_worktree_path"},
+		{name: "move onto itself", run: func() error {
+			_, err := service.Move(context.Background(), "linked/./worktree", "linked/worktree")
+			return err
+		}, code: "same_worktree_path"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

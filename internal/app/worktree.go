@@ -119,12 +119,37 @@ func parseWorktreeList(data []byte) ([]WorktreeInfo, error) {
 	return items, nil
 }
 
+// These commands pass paths and refs positionally without `--end-of-options`,
+// so a leading dash would be parsed as a flag. A newline or NUL byte cannot
+// survive the argv boundary intact either.
+func validateWorktreeArgument(code, label, value string) error {
+	if value == "" {
+		return nil
+	}
+	if strings.ContainsAny(value, "\x00\r\n") {
+		return apperr.New(code, fmt.Sprintf("%s must not contain a newline or NUL byte", label), apperr.ExitUsage, nil)
+	}
+	if strings.HasPrefix(value, "-") {
+		return apperr.New(code, fmt.Sprintf("%s must not start with a dash", label), apperr.ExitUsage, nil)
+	}
+	return nil
+}
+
 func (s *WorktreeService) Add(ctx context.Context, options AddWorktreeOptions) (WorktreeMutation, error) {
 	if options.Path == "" {
 		return WorktreeMutation{}, apperr.New("missing_worktree", "worktree path is required", apperr.ExitUsage, nil)
 	}
 	if options.NewBranch != "" && options.Detach {
 		return WorktreeMutation{}, apperr.New("invalid_arguments", "new branch and detached mode cannot be used together", apperr.ExitUsage, nil)
+	}
+	for _, argument := range []struct{ label, value string }{
+		{"worktree path", options.Path},
+		{"new branch name", options.NewBranch},
+		{"start point", options.Revision},
+	} {
+		if err := validateWorktreeArgument("invalid_arguments", argument.label, argument.value); err != nil {
+			return WorktreeMutation{}, err
+		}
 	}
 	warnings, err := s.syncBeforeAdd(ctx, options.Sync, options.Revision)
 	if err != nil {
@@ -221,6 +246,17 @@ func (s *WorktreeService) Move(ctx context.Context, source, destination string) 
 	if source == "" || destination == "" {
 		return WorktreeMutation{}, apperr.New("missing_worktree_path", "source and destination paths are required", apperr.ExitUsage, nil)
 	}
+	if err := validateWorktreeArgument("invalid_worktree_path", "source path", source); err != nil {
+		return WorktreeMutation{}, err
+	}
+	if err := validateWorktreeArgument("invalid_worktree_path", "destination path", destination); err != nil {
+		return WorktreeMutation{}, err
+	}
+	// Git would report this as a refusal to move a worktree onto itself only
+	// after touching the registration, so reject it before running anything.
+	if filepath.Clean(source) == filepath.Clean(destination) {
+		return WorktreeMutation{}, apperr.New("same_worktree_path", "source and destination are the same path", apperr.ExitUsage, nil)
+	}
 	if _, err := s.repo.Run(ctx, nil, "worktree", "move", source, destination); err != nil {
 		return WorktreeMutation{}, worktreeGitError("move worktree", err)
 	}
@@ -238,6 +274,19 @@ func (s *WorktreeService) Remove(ctx context.Context, path string, confirmed boo
 		return WorktreeMutation{}, worktreeGitError("remove worktree", err)
 	}
 	return WorktreeMutation{Path: path, Action: "removed"}, nil
+}
+
+// SparseSet only probes for dirty paths when sparse checkout is already
+// enabled, because git refuses to narrow an existing selection over local
+// changes. Enabling it for the first time hides just as much, so callers that
+// drive that transition need the same probe up front.
+func (s *WorktreeService) CheckSparseRules(ctx context.Context, target string, directories []string) error {
+	target = s.targetPath(target)
+	directories, err := normalizeSparseDirectories(directories)
+	if err != nil {
+		return err
+	}
+	return s.protectDirtyPaths(ctx, target, directories)
 }
 
 func (s *WorktreeService) SparseList(ctx context.Context, target string) (SparseState, error) {
