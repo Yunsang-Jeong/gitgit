@@ -4120,8 +4120,12 @@ kbd {
 
 .worktree-group-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(265px, 1fr));
+  /* A track with only a minimum grows until another column fits, so a card
+     stretched from 265px to nearly 400px and then snapped back. Bounding both
+     ends keeps the change between breakpoints small and predictable. */
+  grid-template-columns: repeat(auto-fill, minmax(240px, 320px));
   align-items: stretch;
+  justify-content: start;
   gap: var(--space-2);
 }
 
@@ -4253,12 +4257,10 @@ kbd {
   justify-content: flex-end;
   min-height: 0;
   margin: 0;
+  /* Clear the absolutely positioned selection checkbox, which every card has. */
+  padding-right: 23px;
   flex-wrap: nowrap;
   gap: 3px;
-}
-
-.worktree-card:not(.main) .worktree-card-badges {
-  padding-right: 23px;
 }
 
 .worktree-card-badges b {
