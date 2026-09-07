@@ -6497,9 +6497,14 @@ button.repository-tree-row {
 
 .settings-remote-icon-control {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: var(--control-height-compact) minmax(0, 1fr);
   align-items: center;
+  /* The wrapper draws the border that the select inside gives up, so it has to
+     carry the control height too. Without it the border added 2px and this sat
+     taller than the input and the button beside it. */
+  height: var(--control-height-compact);
   min-width: 0;
+  box-sizing: border-box;
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   background: #101c22;
@@ -6509,7 +6514,10 @@ button.repository-tree-row {
   justify-self: center;
 }
 
-.settings-remote-icon-control select {
+.settings-remote-rule .settings-remote-icon-control select:not([multiple]) {
+  align-self: stretch;
+  height: auto;
+  min-height: 0;
   border: 0;
   border-left: 1px solid var(--border);
   border-radius: 0;
