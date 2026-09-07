@@ -554,7 +554,7 @@ func TestSyncRemotesFetchesWithoutMovingLocalBranch(t *testing.T) {
 	if err := os.MkdirAll(remote, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, remote, nil, "init", "-q", "--bare")
+	runGit(t, remote, nil, "init", "-q", "--bare", "-b", "main")
 	runGit(t, repository, nil, "remote", "add", "origin", remote)
 	runGit(t, repository, nil, "push", "-q", "-u", "origin", "main")
 
@@ -595,7 +595,7 @@ func TestPullCurrentBranchFastForwardsTrackingBranch(t *testing.T) {
 	if err := os.MkdirAll(remote, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, remote, nil, "init", "-q", "--bare")
+	runGit(t, remote, nil, "init", "-q", "--bare", "-b", "main")
 	runGit(t, repository, nil, "remote", "add", "origin", remote)
 	runGit(t, repository, nil, "push", "-q", "-u", "origin", "main")
 
@@ -632,7 +632,7 @@ func TestPullCurrentBranchRejectsDivergenceWithoutMergeCommit(t *testing.T) {
 	if err := os.MkdirAll(remote, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, remote, nil, "init", "-q", "--bare")
+	runGit(t, remote, nil, "init", "-q", "--bare", "-b", "main")
 	runGit(t, repository, nil, "remote", "add", "origin", remote)
 	runGit(t, repository, nil, "push", "-q", "-u", "origin", "main")
 
