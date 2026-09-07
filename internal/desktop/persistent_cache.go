@@ -185,6 +185,9 @@ func (c *PersistentCache) storeValueLocked(key []byte, value any) error {
 	return nil
 }
 
+// Namespaces whose entries are only valid for one set of refs.
+var refScopedNamespaces = []string{"history", "history-scope", "branches"}
+
 func (c *PersistentCache) ensureFingerprintLocked(repository, fingerprint string) error {
 	if c.db == nil {
 		return nil
@@ -203,7 +206,9 @@ func (c *PersistentCache) ensureFingerprintLocked(repository, fingerprint string
 
 	batch := c.db.NewBatch()
 	defer batch.Close()
-	for _, namespace := range []string{"history", "branches"} {
+	// Every ref-scoped namespace has to be listed here. A namespace left out
+	// is never invalidated, so its entries outlive the refs they describe.
+	for _, namespace := range refScopedNamespaces {
 		prefix := persistentRepositoryPrefix(namespace, repository)
 		if err := batch.DeleteRange(prefix, prefixLimit(prefix), nil); err != nil {
 			return fmt.Errorf("invalidate persistent %s cache: %w", namespace, err)

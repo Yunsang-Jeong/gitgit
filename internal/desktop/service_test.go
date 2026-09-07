@@ -1697,3 +1697,35 @@ func TestHistoryScopeSurvivesRestartThroughThePersistentCache(t *testing.T) {
 		t.Fatalf("a relaunch re-read the history page instead of using the persisted page\n%s", commands)
 	}
 }
+
+// The persisted scope holds allRevisions, so a namespace missing from the
+// fingerprint invalidation list keeps naming refs that no longer exist and
+// every later history read fails on them.
+func TestPersistedHistoryScopeIsInvalidatedWhenRefsChange(t *testing.T) {
+	repository := createRepository(t)
+	runGit(t, repository, nil, "branch", "feature/temporary")
+	cacheDir := filepath.Join(t.TempDir(), "cache")
+
+	readAllBranches := func() (HistoryResponse, error) {
+		cache, err := OpenPersistentCache(cacheDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service := NewServiceWithCache(nil, cache)
+		defer func() { _ = service.Close(); _ = cache.Close() }()
+		if _, err := service.Open(context.Background(), repository); err != nil {
+			t.Fatal(err)
+		}
+		return service.History(context.Background(), HistoryRequest{AllBranches: true, Limit: 10})
+	}
+
+	if _, err := readAllBranches(); err != nil {
+		t.Fatalf("read All branches history: %v", err)
+	}
+
+	runGit(t, repository, nil, "branch", "-D", "feature/temporary")
+
+	if _, err := readAllBranches(); err != nil {
+		t.Fatalf("read All branches history after deleting a branch: %v", err)
+	}
+}
