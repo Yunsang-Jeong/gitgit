@@ -7,7 +7,7 @@ audience:
 status: active
 document_type: module
 scope: search
-last_updated: 2026-08-15
+last_updated: 2026-09-07
 ---
 
 # Search Module
@@ -162,3 +162,31 @@ Commit module의 Preset은 Search result에 적용되지 않는다. Search는 co
 - 여러 search의 동시 background queue
 - Result pagination 또는 `Load more`
 - Search result에서 직접 commit rewrite
+
+## Persistence와 background queue 계획
+
+Session persistence와 background queue는 아직 구현하지 않았다. 조사에서 확인한 제약과 결정해야 할 사항을 남긴다.
+
+### 재사용할 persistence 계층
+
+`internal/desktop/project_store.go`의 `ProjectStore`가 그대로 본이 된다. Version 봉투 JSON, temp file에 쓴 뒤 `chmod 0600`·`Sync`·`rename`으로 교체하는 원자적 write, file이 없으면 빈 값을 돌려주는 관대한 read, 그리고 `DesktopApp.startup`의 주입 seam으로 test에서 가짜를 넣을 수 있는 구조를 갖췄다. `$XDG_CONFIG_HOME/gitgit/`에 형제 file을 두면 된다.
+
+`PersistentCache`는 쓰지 않는다. 스스로 disposable로 문서화돼 있고 ref fingerprint가 바뀌면 통째로 지워진다.
+
+### 결정해야 할 것
+
+**저장 범위.** Session이 보존하는 "마지막 성공 결과"는 최대 250 commit에 각 commit의 전체 `changed_files`가 붙어 JSON blob으로 크다. Query만 저장하고 결과는 재실행할지, 결과까지 저장하고 ref 변화에 따른 무효화 규칙을 둘지 정해야 한다.
+
+**Repository 소유권.** Background queue의 존재 이유는 지금 보고 있지 않은 worktree를 대상으로 검색을 돌리는 것이다. 그런데 `Service`는 단일 `s.repository`를 들고 있고, `beginReservedRepositorySwitch`는 repository를 전환할 때 진행 중인 검색을 무조건 취소한다. Job마다 `gitexec.OpenRepository`로 handle을 열거나 job과 함께 repository를 넘기는 구조가 필요하다.
+
+**동시성.** `Service`는 동시 검색을 하나만 지원한다. `searchCancel`과 `searchID` 한 쌍으로 새 검색이 이전 검색을 대체하는 구조이며, queue는 이 가정을 바꾼다.
+
+**Progress 배선.** Wails event는 `search:progress` 하나뿐이고 `request_id`로만 구분한다. Queue에는 session/job ID와 terminal done/cancelled event가 필요하다. `internal/vscodehelper/search_diff.go`의 `progressReporter`가 bounded·thread-safe·terminal event를 갖춘 참고 구현이다.
+
+### 선행 작업
+
+Session lifecycle은 `App.svelte`에 인라인이라 test할 수 없다. `lib/search-session.ts`로 추출하는 것이 persistence test의 전제조건이다. `apps/vscode/src/search/model.ts`는 desktop에 없는 reducer 형태(`phase: 'idle' | 'running' | 'ready' | 'stale' | 'error'`와 `reduceSearchState`)를 이미 갖고 있어 참고 대상이다.
+
+### 지켜야 할 성능 보장
+
+`TestHistoryAndSearchBatchChangedFileMetadata`는 page당 `diff-tree --stdin` batch 한 번, 중복 count command 없음, message-only 검색에 eager diff 없음을 단언한다. Queue를 도입해도 계속 통과해야 한다. 큰 repository의 read 성능은 `task check:performance`가 별도로 지킨다.

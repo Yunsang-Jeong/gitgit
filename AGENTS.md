@@ -6,7 +6,7 @@
 
 | 문서 | Canonical scope | 변경 시점 |
 | --- | --- | --- |
-| [docs/development.md](docs/development.md) | **Required gate**: `wails dev` browser-first 개발·검증 절차 | Product code 또는 test를 변경하는 모든 작업의 시작과 완료 전 |
+| [docs/development.md](docs/development.md) | **Required gate**: `wails dev` browser-first 개발·검증 절차, large repository load budget, 개발용 project 등록 | Product code 또는 test를 변경하는 모든 작업의 시작과 완료 전 |
 | [README.md](README.md) | 사람용 프로젝트 진입점, 빠른 시작, 문서 연결 | 첫 사용 경험이나 최상위 제품 설명이 바뀔 때 |
 | [docs/overview.md](docs/overview.md) | 전체 개요, 방향성, architecture, 구현 현황과 공통 경계 | 제품 구조, 지원 범위, persistence 또는 build 흐름이 바뀔 때 |
 | [docs/commit.md](docs/commit.md) | Commit 화면과 commit rewrite 규칙 | history, Preset, Inspector, editing 조건이 바뀔 때 |
