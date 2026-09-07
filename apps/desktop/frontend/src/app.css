@@ -40,6 +40,9 @@
   --section-bar-height: 36px;
   --control-height: 32px;
   --control-height-compact: 28px;
+  /* One width for the pickers that sit inside a Settings list row, so the
+     columns line up across preset rules and remote mappings. */
+  --settings-row-select: 120px;
   --menu-row-height: 32px;
   --row-height: 38px;
   --criteria-label-width: 56px;
@@ -6052,7 +6055,7 @@ button.repository-tree-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   min-height: 44px;
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
@@ -6158,9 +6161,9 @@ button.repository-tree-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   height: 36px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-3);
   border-bottom: 1px solid var(--border);
   background: #111d22;
 }
@@ -6203,14 +6206,14 @@ button.repository-tree-row {
 }
 
 .settings-preset-rules {
-  padding: var(--space-2);
+  padding: var(--space-3);
 }
 
 .settings-preset-rule {
   display: grid;
-  grid-template-columns: 96px 108px minmax(170px, 1fr) var(--control-height-compact);
+  grid-template-columns: var(--settings-row-select) var(--settings-row-select) minmax(170px, 1fr) var(--control-height-compact);
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   min-width: 0;
   margin-bottom: 6px;
 }
@@ -6458,10 +6461,10 @@ button.repository-tree-row {
 
 .settings-remote-rule {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 150px auto;
+  grid-template-columns: minmax(220px, 1fr) var(--settings-row-select) auto;
   align-items: end;
   gap: var(--space-2);
-  padding: var(--space-2);
+  padding: var(--space-3);
   border-bottom: 1px solid var(--border);
 }
 
