@@ -39,6 +39,8 @@ vars:
   SUBGIT_DIR:
     sh: 'printf "%s" "${SUBGIT_DIR:-{{.ROOT_DIR}}/subgit}"'
   SUBGIT_SETUP: '{{.ROOT_DIR}}/testdata/subgit/setup.sh'
+  CONFIG_DIR:
+    sh: 'printf "%s" "${XDG_CONFIG_HOME:-$HOME/.config}/gitgit"'
   LARGE_FIXTURE:
     sh: 'printf "%s" "${GITGIT_LARGE_FIXTURE:-${XDG_CACHE_HOME:-$HOME/.cache}/gitgit/test-fixtures/kubernetes}"'
   LARGE_FIXTURE_REMOTE: '{{.LARGE_FIXTURE_REMOTE | default "https://github.com/kubernetes/kubernetes.git"}}'
@@ -225,6 +227,50 @@ tasks:
     cmds:
       - 'mkdir -p "$(dirname "{{.LARGE_FIXTURE}}")"'
       - 'git clone --progress "{{.LARGE_FIXTURE_REMOTE}}" "{{.LARGE_FIXTURE}}"'
+
+  dev:project:
+    desc: Register a repository with the app without using the picker dialog.
+    aliases: [register]
+    summary: |
+      Registers a repository for development so the Project picker lists it.
+
+      The store re-reads its file on every access, so this takes effect while
+      the app is running; the picker shows it on the next open.
+
+        task dev:project -- /absolute/path/to/repo
+        task dev:project PROJECT=subgit
+
+      A relative path is resolved against the repository root.
+    vars:
+      PROJECT: '{{.PROJECT | default .CLI_ARGS}}'
+    preconditions:
+      - sh: 'test -n "{{.PROJECT}}"'
+        msg: 'dev:project needs a repository: task dev:project -- /path/to/repo'
+      - sh: 'command -v jq >/dev/null 2>&1'
+        msg: 'dev:project requires jq.'
+    cmds:
+      - |
+        set -e
+        target='{{.PROJECT}}'
+        case "$target" in /*) ;; *) target="{{.ROOT_DIR}}/$target" ;; esac
+        # Match canonicalProjectRoot: absolute, symlinks resolved, cleaned.
+        root="$(cd "$target" 2>/dev/null && pwd -P)" || {
+          echo "not a directory: $target" >&2; exit 1
+        }
+        git -C "$root" rev-parse --git-dir >/dev/null 2>&1 || {
+          echo "not a Git repository: $root" >&2; exit 1
+        }
+        store="{{.CONFIG_DIR}}/projects.json"
+        mkdir -p "$(dirname "$store")"
+        test -f "$store" || printf '{"version":1,"projects":[]}' > "$store"
+        tmp="$store.task-$$"
+        jq --arg root "$root" --arg name "$(basename "$root")" \
+          'if any(.projects[]; .root == $root) then .
+           else .projects += [{root: $root, name: $name, favorite: false}] end' \
+          "$store" > "$tmp"
+        mv "$tmp" "$store"
+        chmod 600 "$store"
+        echo "registered: $root"
 
   check:performance:
     desc: Measure large-repository load times against the budget.

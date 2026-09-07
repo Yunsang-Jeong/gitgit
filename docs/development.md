@@ -95,6 +95,19 @@ Product code 또는 test를 변경하는 작업은 다음 순서를 따른다.
 - Mock screenshot이나 DOM snapshot만 확인
 - Unit test만 통과하고 Wails-exposed flow를 실행하지 않음
 
+## 개발용 project 등록
+
+Project picker의 `Register Git repository`는 native directory dialog를 연다. 검증 대상 repository를 자주 바꾸는 개발 중에는 이를 우회할 수 있다.
+
+```sh
+task dev:project -- /absolute/path/to/repo
+task dev:project PROJECT=subgit            # ROOT_DIR 기준 상대 경로도 가능
+```
+
+이 task는 app이 쓰는 것과 같은 `projects.json`에 직접 기록하며, `canonicalProjectRoot`와 같은 규칙(absolute, symlink 해석, clean)으로 경로를 정규화한다. 이미 등록된 repository는 다시 추가하지 않고, Git repository가 아니면 거부한다.
+
+`ProjectStore`는 접근할 때마다 file을 다시 읽으므로 app을 재시작할 필요는 없다. 다만 frontend는 project 목록을 시작 시 한 번만 가져오고 `Refresh`는 repository 상태만 갱신하므로, picker에 반영하려면 **page를 새로고침**한다.
+
 ## Large repository load budget
 
 Read 성능은 작은 fixture로는 드러나지 않는다. `internal/desktop`의 `TestLargeRepositoryLoadBudget`은 14만 commit 규모의 실제 저장소에서 repository open과 history read의 wall-clock을 재고 예산을 넘으면 실패한다.

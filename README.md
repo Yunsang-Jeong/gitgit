@@ -51,6 +51,8 @@ task fixture:create
 task fixture:reset
 ```
 
+검증 대상 repository는 native dialog 대신 `task dev:project -- /path/to/repo`로 등록할 수 있다. 상세는 [Development Gate](docs/development.md)를 따른다.
+
 `task fixture:create`은 GitGit marker가 없는 기존 directory를 덮어쓰지 않는다. `task fixture:reset`은 관리되는 fixture만 재생성한다. 기존에 익숙한 `task subgit`, `task subgit-reset`도 각각 alias로 제공한다.
 
 `subgit/`은 app을 실제로 조작해 보는 개발용 playground다. Edit Mode로 history를 rewrite하면 내용이 canonical fixture와 달라지므로, `task fixture:create`은 HEAD commit 수뿐 아니라 모든 ref에서 도달 가능한 commit 수까지 확인해 이 상태를 감지하고 `task fixture:reset`을 안내한다. Go integration test는 `subgit/`을 사용하지 않고 `~/.cache/gitgit/test-fixtures/` 아래에 별도 fixture를 만들어 쓰므로, playground를 마음대로 바꿔도 test 결과에 영향을 주지 않는다.
