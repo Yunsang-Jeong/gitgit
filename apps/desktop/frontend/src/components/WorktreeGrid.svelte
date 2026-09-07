@@ -3,8 +3,9 @@
   import WorktreeCard from './WorktreeCard.svelte'
   import WorktreeCreateDialog from './WorktreeCreateDialog.svelte'
   import WorktreeMoveDialog from './WorktreeMoveDialog.svelte'
-  import { moveBlocker, removalBlocker, selectedBlocker, type WorktreeActionContext } from '../lib/worktree-actions'
-  import type { CreateWorktreeRequest, MoveWorktreeRequest, RepositoryState, WorktreeInfo } from '../lib/types'
+  import WorktreeSparseDialog from './WorktreeSparseDialog.svelte'
+  import { moveBlocker, removalBlocker, selectedBlocker, sparseBlocker, type WorktreeActionContext } from '../lib/worktree-actions'
+  import type { CreateWorktreeRequest, MoveWorktreeRequest, RepositoryState, RepositoryTreeResponse, WorktreeInfo } from '../lib/types'
 
   export let repository: RepositoryState
   export let activeProjectRoot = ''
@@ -17,6 +18,8 @@
   export let onChooseParent: (current: string) => Promise<string>
   export let onSuggestParent: () => Promise<string>
   export let onMove: (request: MoveWorktreeRequest) => Promise<string>
+  export let onSparse: (path: string, action: 'set' | 'expand' | 'contract' | 'disable', directories: string[]) => Promise<string>
+  export let onLoadTree: (revision: string, directory: string) => Promise<RepositoryTreeResponse>
 
   let selectedPaths: string[] = []
   let selectionAnchor = ''
@@ -24,6 +27,7 @@
   let pendingRemoval: WorktreeInfo[] = []
   let createOpen = false
   let pendingMove: WorktreeInfo | null = null
+  let pendingSparse: WorktreeInfo | null = null
   let confirmingRemoval = false
   let confirmButton: HTMLButtonElement
   let actionsRoot: HTMLDivElement
@@ -32,7 +36,10 @@
   $: mainWorktrees = orderedWorktrees.filter((worktree) => worktree.path === activeProjectRoot)
   $: mergedWorktrees = orderedWorktrees.filter((worktree) => worktree.path !== activeProjectRoot && worktree.merged_into_default)
   $: unmergedWorktrees = orderedWorktrees.filter((worktree) => worktree.path !== activeProjectRoot && !worktree.merged_into_default)
-  $: selectablePaths = new Set(orderedWorktrees.filter((worktree) => worktree.path !== activeProjectRoot).map((worktree) => worktree.path))
+  // Every worktree can be selected. Removal still refuses the main worktree by
+  // name, and sparse-checkout has to stay reachable on the primary checkout,
+  // which is where a large repository most needs it.
+  $: selectablePaths = new Set(orderedWorktrees.map((worktree) => worktree.path))
   $: selectedWorktrees = orderedWorktrees.filter((worktree) => selectedPaths.includes(worktree.path))
   $: actionContext = {
     activeProjectRoot,
@@ -41,6 +48,9 @@
   } satisfies WorktreeActionContext
   $: removableWorktrees = orderedWorktrees.filter((worktree) => removalBlocker(worktree, actionContext) === '')
   $: removalReason = selectedBlocker(selectedWorktrees, actionContext, removalBlocker)
+  $: sparseReason = selectedWorktrees.length === 1
+    ? sparseBlocker(selectedWorktrees[0], actionContext)
+    : 'Select exactly one worktree'
   $: moveReason = selectedWorktrees.length === 1
     ? moveBlocker(selectedWorktrees[0], actionContext)
     : 'Select exactly one worktree'
@@ -79,7 +89,6 @@
   }
 
   function setWorktreeSelected(worktree: WorktreeInfo, checked: boolean, range = false): void {
-    if (worktree.path === activeProjectRoot) return
     const paths = new Set(selectedPaths)
     if (range && selectionAnchor) {
       const anchorIndex = orderedWorktrees.findIndex((candidate) => candidate.path === selectionAnchor)
@@ -88,7 +97,6 @@
         const start = Math.min(anchorIndex, targetIndex)
         const end = Math.max(anchorIndex, targetIndex)
         for (const candidate of orderedWorktrees.slice(start, end + 1)) {
-          if (candidate.path === activeProjectRoot) continue
           if (checked) paths.add(candidate.path)
           else paths.delete(candidate.path)
         }
@@ -174,6 +182,10 @@
               Move…
               {#if moveReason}<small>{moveReason}</small>{/if}
             </button>
+            <button type="button" role="menuitem" disabled={Boolean(sparseReason) || removing} on:click={() => { actionsOpen = false; pendingSparse = selectedWorktrees[0] ?? null }}>
+              Sparse-checkout…
+              {#if sparseReason}<small>{sparseReason}</small>{/if}
+            </button>
             <button class="danger" type="button" role="menuitem" disabled={Boolean(removalReason)} on:click={() => void requestRemoval(selectedWorktrees)}>
               Remove {selectedWorktrees.length} worktree{selectedWorktrees.length === 1 ? '' : 's'} &amp; branches
               {#if removalReason}<small>{removalReason}</small>{/if}
@@ -207,7 +219,7 @@
             {worktree}
             defaultBranch={repository.default_branch}
             main
-            selected={false}
+            selected={selectedPaths.includes(worktree.path)}
             onToggle={setWorktreeSelected}
             {onView}
             {onOpen}
@@ -280,6 +292,17 @@
       {onMove}
       {onChooseParent}
       onClose={() => (pendingMove = null)}
+    />
+  {/if}
+
+  {#if pendingSparse}
+    <WorktreeSparseDialog
+      worktree={pendingSparse}
+      busy={removing}
+      {onLoadTree}
+      onApply={(action, directories) => onSparse((pendingSparse as WorktreeInfo).path, action, directories)}
+      onDisable={() => onSparse((pendingSparse as WorktreeInfo).path, 'disable', [])}
+      onClose={() => (pendingSparse = null)}
     />
   {/if}
 

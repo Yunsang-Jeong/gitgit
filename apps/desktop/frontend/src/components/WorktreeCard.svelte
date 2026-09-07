@@ -32,24 +32,21 @@
 </script>
 
 <article class:main class:selected class="worktree-card">
-  {#if !main}
-    <input
-      class="worktree-selection-input"
-      type="checkbox"
-      checked={selected}
-      aria-label={`Select ${worktree.branch || 'detached worktree'}`}
-      on:click|stopPropagation
-      on:change={(event) => onToggle(worktree, (event.currentTarget as HTMLInputElement).checked)}
-    />
-  {/if}
+  <input
+    class="worktree-selection-input"
+    type="checkbox"
+    checked={selected}
+    aria-label={`Select ${worktree.branch || 'detached worktree'}`}
+    on:click|stopPropagation
+    on:change={(event) => onToggle(worktree, (event.currentTarget as HTMLInputElement).checked)}
+  />
 
   <button
-    class:selectable={!main}
-    class="worktree-card-select"
+    class="worktree-card-select selectable"
     type="button"
-    aria-pressed={main ? undefined : selected}
-    title={main ? 'Main worktree is not selectable' : 'Click to toggle selection · Shift-click to select a range'}
-    on:click={(event) => { if (!main) onToggle(worktree, !selected, event.shiftKey) }}
+    aria-pressed={selected}
+    title={'Click to toggle selection · Shift-click to select a range'}
+    on:click={(event) => onToggle(worktree, !selected, event.shiftKey)}
   >
     <span class="worktree-card-heading">
       <span class="branch-glyph">⑂</span>
