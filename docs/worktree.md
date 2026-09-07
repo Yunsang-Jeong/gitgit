@@ -1,13 +1,13 @@
 ---
 title: Worktree Module
-description: Linked worktree의 상태 모델, 화면 구성, 선택과 안전한 제거 규칙
+description: Linked worktree의 상태 모델, 화면 구성, 선택과 생성·이동·sparse-checkout·제거 규칙
 audience:
   - human
   - ai-agent
 status: active
 document_type: module
 scope: worktree
-last_updated: 2026-08-02
+last_updated: 2026-09-07
 ---
 
 # Worktree Module
@@ -53,7 +53,7 @@ Path는 앞의 directory 부분만 ellipsis로 줄이고 마지막 segment는 �
 
 Merged와 Unmerged는 card badge로 반복하지 않는다. Card가 이미 해당 group 안에 있으므로 badge는 group에서 알 수 없는 정보인 `Default`, `Locked`, `Sparse`만 표시한다.
 
-Main worktree는 항상 먼저 표시하며 bulk-removal selection 대상이 아니다.
+Main worktree는 항상 먼저 표시한다. Selection 자체는 가능하지만 bulk-removal 대상은 아니며, 제거는 이름으로 거부한다. Sparse-checkout은 primary checkout에서 가장 필요하므로 선택을 막지 않는다.
 
 ## Selection과 action
 
@@ -61,10 +61,14 @@ Card click 또는 checkbox로 linked worktree를 선택한다. Shift-click은 �
 
 각 card의 footer에는 그 worktree만 대상으로 하는 **Commits**, **Finder**, **IDE**를 둔다. 선택 없이 바로 실행할 수 있으므로 단일 worktree를 열 때 상단 menu를 거치지 않는다.
 
+상단 header의 **New worktree**는 선택과 무관하게 새 linked worktree를 만든다.
+
 단일 선택 action(상단 `Actions` menu):
 
 - **View commits**: 해당 worktree를 active repository root로 열고 Commit 화면으로 이동한다.
 - **Open in Finder**: worktree directory를 Finder에서 연다.
+- **Move…**: worktree directory를 다른 위치로 옮긴다.
+- **Sparse-checkout…**: 유지할 directory를 고른다.
 
 Bulk action:
 
@@ -95,15 +99,58 @@ Default branch는 remote symbolic ref, primary worktree branch와 deterministic 
 
 Remote update는 Commit 화면의 상단 `Sync`와 `Pull`에서만 명시적으로 실행한다. `Sync`는 remotes를 fetch하고 prune하지만 worktree나 branch를 자동 제거하지 않는다. `Pull`은 current tracking branch만 fast-forward하며 merge commit을 만들지 않는다. Worktree 화면에서는 실수로 network operation을 시작하지 않도록 두 action을 disabled 상태로 표시하며, local repository state는 `Refresh`로 다시 읽을 수 있다.
 
+## 생성
+
+`New worktree`는 기존 parent directory와 새 directory 이름 하나로 destination을 정한다. 이름은 path separator, newline, `.`/`..`, 선행 dash를 허용하지 않으며 이미 존재하는 경로나 등록된 worktree와 포함관계인 경로는 거부한다. Branch 이름을 고르면 directory 이름이 따라오되(`feature/thing` → `feature-thing`) 사용자가 직접 입력하면 그 값을 유지한다.
+
+Checkout 방식은 셋 중 하나다.
+
+- **New branch**: 새 branch를 만든다. 이미 있는 이름과 `check-ref-format`을 통과하지 못하는 이름은 거부한다. Start point는 선택 사항이다.
+- **Existing branch**: 다른 worktree가 이미 checkout한 branch는 목록에 넣지 않는다.
+- **Detached**: 지정한 revision을 detached HEAD로 checkout한다.
+
+생성은 network를 사용하지 않는다. Remote update는 Commit 화면의 `Sync`와 `Pull` 소관이며, 다른 worktree를 만드는 동작이 지금 보고 있는 branch를 fast-forward하는 부수효과를 만들지 않는다.
+
+## 이동
+
+`Move…`는 checkout을 다른 위치로 옮기고 Git registration을 갱신한다. Branch, commit, local change는 그대로다. Destination 규칙은 생성과 같으며 현재 위치와 같은 경로는 거부한다.
+
+다음 worktree는 이동하지 않는다.
+
+- Main worktree
+- 지금 보고 있는 worktree — Service가 repository handle을 그 경로에 고정하므로, 옮기면 이후 모든 command가 사라진 경로를 가리킨다. Main으로 전환한 뒤 옮긴다.
+- Locked worktree, disk에서 사라진 worktree, local change가 있는 worktree
+
+Dialog는 `from → to`를 함께 보여 주며 그것이 확인 역할을 한다. 제거와 달리 없어지는 것이 없으므로 별도 confirmation modal을 두지 않는다.
+
 ## Sparse-checkout
 
-Worktree card는 sparse-checkout 활성화와 configured directory를 읽어 표시한다. 현재 UI는 sparse-checkout pattern을 만들거나 수정하지 않는다.
+Worktree card는 sparse-checkout 활성화와 configured directory를 읽어 표시한다. `Sparse-checkout…`은 그 선택을 편집한다.
+
+GitGit은 **cone mode만** 관리한다. 이미 non-cone sparse checkout이 켜진 worktree는 이유를 표시하고 편집하지 않는다. Bare worktree, disk에서 사라진 worktree, locked worktree, unborn HEAD도 같은 방식으로 제외한다.
+
+Directory tree는 그 worktree의 HEAD에서 한 level씩 읽는다. 큰 repository의 모든 directory를 미리 가져올 수 없기 때문이고, backend가 새 directory를 검증하는 대상도 같은 tree다. Cone mode에서 선택한 directory는 그 아래 전부를 포함하므로 하위 directory는 따로 보내지 않는다.
+
+선택 변화는 다음으로 옮긴다.
+
+| 변화 | 동작 |
+| --- | --- |
+| Sparse가 꺼져 있고 선택이 있음 | `set` |
+| 추가만 있음 | `expand` |
+| 제거만 있음 | `contract` |
+| 추가와 제거가 함께 | `set` — 원자적으로 적용되며 dirty-path 검사를 함께 수행한다 |
+
+Directory를 숨기는 변화(`contract`와 혼합 `set`)만 두 번 확인한다. 나머지는 파일을 되살리는 방향이므로 확인을 요구하지 않는다. 빈 선택은 "root file만"과 "전체 checkout 복구" 사이에서 모호하므로 plan 결과가 되지 않으며, 전체 복구는 `Disable sparse-checkout`으로 명시한다.
+
+선택 밖에 local change가 있는 경로를 숨기려 하면 backend가 그 경로를 이름으로 알려 주며 거부한다.
 
 ## 현재 제공하지 않는 것
 
-- 새 linked worktree 생성
-- Worktree path 이동
 - Worktree에서 branch checkout
 - Locked/dirty/unmerged worktree의 force removal
-- Sparse-checkout enable/disable 또는 pattern mutation
+- Non-cone sparse-checkout 관리
+- 생성 시 remote branch tracking(`--track`)과 remote sync
+- Worktree lock/unlock과 prune
+- 생성·이동·sparse-checkout의 일괄 실행
+- 이동한 worktree를 대상으로 하던 Search session의 자동 재연결
 - Remote branch 삭제

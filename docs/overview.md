@@ -178,7 +178,7 @@ VS Code extension v0.1은 같은 extension ID와 version으로 `darwin-arm64`, `
 
 - Application-wide shortcut은 Settings의 `Command+,`만 유지한다. Commit과 Search의 결과 목록은 focus가 목록 안에 있을 때만 동작하는 방향키 이동을 제공하며, 이는 application-wide shortcut으로 취급하지 않는다.
 - GitGit은 자동 push, force push 또는 remote branch 삭제를 수행하지 않는다.
-- Worktree 생성·이동과 sparse-checkout mutation은 아직 제공하지 않는다.
+- Worktree 생성·이동과 cone-mode sparse-checkout mutation을 제공한다. Non-cone sparse, force removal, lock/unlock과 prune은 아직 제공하지 않는다.
 - Search session persistence와 background search queue는 아직 제공하지 않는다.
 - PR/MR/CI provider API integration은 아직 제공하지 않는다. VS Code blame의 local metadata 기반 review link 추론은 network integration으로 취급하지 않는다.
 - VS Code extension과 helper는 read-only이며 repository mutation이나 network operation을 수행하지 않는다.
