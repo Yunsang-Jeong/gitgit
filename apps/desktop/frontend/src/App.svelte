@@ -40,6 +40,7 @@
     CommitDetail,
     CommitEditStack,
     CommitFileDraft,
+    CreateWorktreeRequest,
     CommitFilterRule,
     CommitFilterAction,
     CommitFilterField,
@@ -1536,6 +1537,36 @@
     }
   }
 
+  async function createWorktree(request: CreateWorktreeRequest): Promise<string> {
+    if (!repository || removingWorktrees) return 'A repository action is already running.'
+    if (repositoryTransitioning || blockRepositoryActionDuringEdit()) return 'Wait for the current repository action to finish.'
+    const repositoryRoot = repository.root
+    const requestID = repositoryRequestID
+    removingWorktrees = true
+    try {
+      const result = await api.createWorktree(request)
+      if (requestID !== repositoryRequestID || repository?.root !== repositoryRoot) return ''
+      await activateRepository(result.state, result.state.project_root || activeProjectRoot)
+      const warning = (result.warnings ?? []).join(' · ')
+      if (warning) setStatus(`Worktree created at ${result.path} · ${warning}`, 'warning')
+      else setStatus(`Worktree created at ${result.path}`, 'success')
+      return ''
+    } catch (error) {
+      const message = errorText(error)
+      if (requestID !== repositoryRequestID || repository?.root !== repositoryRoot) return message
+      setStatus(message, 'error')
+      try {
+        const refreshed = await api.refresh()
+        if (requestID === repositoryRequestID && repository?.root === repositoryRoot) repository = refreshed
+      } catch {
+        // Preserve the actionable creation error when refresh also fails.
+      }
+      return message
+    } finally {
+      removingWorktrees = false
+    }
+  }
+
   async function addPatternSearch(source: Pattern['source'], value: string): Promise<void> {
     const normalized = value.trim()
     if (!normalized) return
@@ -2330,6 +2361,9 @@
         onOpen={(worktree) => void openWorktree(worktree)}
         onOpenIDE={(worktree) => void openWorktreeInIDE(worktree)}
         onRemove={removeMergedWorktrees}
+        onCreate={createWorktree}
+        onChooseParent={(current) => api.chooseWorktreeParentDirectory(current)}
+        onSuggestParent={() => api.suggestedWorktreeParentDirectory()}
       />
     {:else if navigatorView === 'worktrees'}
       <section class="worktree-workspace pane"><div class="workspace-empty">Select a project to view its worktrees.</div></section>

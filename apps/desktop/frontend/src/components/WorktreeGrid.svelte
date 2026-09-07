@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import WorktreeCard from './WorktreeCard.svelte'
+  import WorktreeCreateDialog from './WorktreeCreateDialog.svelte'
   import { removalBlocker, selectedBlocker, type WorktreeActionContext } from '../lib/worktree-actions'
-  import type { RepositoryState, WorktreeInfo } from '../lib/types'
+  import type { CreateWorktreeRequest, RepositoryState, WorktreeInfo } from '../lib/types'
 
   export let repository: RepositoryState
   export let activeProjectRoot = ''
@@ -11,11 +12,15 @@
   export let onOpen: (worktree: WorktreeInfo) => void
   export let onOpenIDE: (worktree: WorktreeInfo) => void
   export let onRemove: (worktrees: WorktreeInfo[]) => Promise<boolean>
+  export let onCreate: (request: CreateWorktreeRequest) => Promise<string>
+  export let onChooseParent: (current: string) => Promise<string>
+  export let onSuggestParent: () => Promise<string>
 
   let selectedPaths: string[] = []
   let selectionAnchor = ''
   let actionsOpen = false
   let pendingRemoval: WorktreeInfo[] = []
+  let createOpen = false
   let confirmingRemoval = false
   let confirmButton: HTMLButtonElement
   let actionsRoot: HTMLDivElement
@@ -167,6 +172,12 @@
         {/if}
       </div>
       <button
+        class="worktree-new"
+        type="button"
+        disabled={removing}
+        on:click={() => { actionsOpen = false; createOpen = true }}
+      >New worktree</button>
+      <button
         class="worktree-clear-merged"
         type="button"
         aria-label="Clear merged worktrees"
@@ -240,6 +251,17 @@
       {/if}
     </section>
   </div>
+
+  {#if createOpen}
+    <WorktreeCreateDialog
+      {repository}
+      busy={removing}
+      {onCreate}
+      {onChooseParent}
+      {onSuggestParent}
+      onClose={() => (createOpen = false)}
+    />
+  {/if}
 
   {#if pendingRemoval.length > 0}
     <div class="worktree-confirm-backdrop" role="presentation" on:mousedown={() => { if (!confirmingRemoval) pendingRemoval = [] }}>

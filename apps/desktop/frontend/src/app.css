@@ -6733,3 +6733,172 @@ select:not([multiple]) {
 .edit-mode-provenance-note[aria-invalid='true'] {
   border-color: #8f4d5c;
 }
+
+.worktree-dialog {
+  width: min(520px, 100%);
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+}
+
+.worktree-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+
+.worktree-field label,
+.worktree-field-label {
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--font-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.worktree-field label small {
+  margin-left: 5px;
+  color: #5d6f77;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.worktree-field input[type='text'],
+.worktree-field select {
+  width: 100%;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid #29424c;
+  border-radius: 4px;
+  background: #0e191f;
+  color: #d1dce0;
+  font-family: var(--font-sans);
+  font-size: var(--font-meta);
+}
+
+.worktree-field input[type='text']:focus,
+.worktree-field select:focus {
+  border-color: #3d798f;
+  outline: none;
+}
+
+.worktree-field input:disabled,
+.worktree-field select:disabled {
+  opacity: 0.55;
+}
+
+.worktree-field-row {
+  display: flex;
+  gap: 6px;
+}
+
+.worktree-field-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.worktree-field-row button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #29424c;
+  border-radius: 4px;
+  background: #14222a;
+  color: #b7c7ce;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--font-micro);
+  white-space: nowrap;
+}
+
+.worktree-field-row button:hover:not(:disabled) {
+  border-color: #3d616f;
+  color: #e2edf1;
+}
+
+.worktree-mode-row {
+  display: flex;
+  gap: 14px;
+}
+
+.worktree-mode-row label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #b7c7ce;
+  cursor: pointer;
+  font-size: var(--font-meta);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.worktree-dialog-preview {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: var(--space-3);
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #0c1519;
+  font-size: var(--font-meta);
+}
+
+.worktree-dialog-preview dt {
+  color: var(--text-muted);
+}
+
+.worktree-dialog-preview dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.worktree-dialog-preview code {
+  color: #d1dce0;
+  font-family: var(--font-mono);
+}
+
+.worktree-dialog-hint {
+  margin: 0 0 10px;
+  color: #9aa9b1;
+  font-family: var(--font-sans);
+  font-size: var(--font-micro);
+}
+
+.worktree-dialog-error {
+  margin: 0 0 10px;
+  color: #e2879a;
+  font-family: var(--font-sans);
+  font-size: var(--font-micro);
+}
+
+.worktree-confirm-actions button.primary {
+  border-color: #3d798f;
+  background: #1d3b47;
+  color: #e2edf1;
+}
+
+.worktree-confirm-actions button.primary:hover:not(:disabled) {
+  background: #244857;
+}
+
+.worktree-new {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid #3d798f;
+  border-radius: 4px;
+  background: #1d3b47;
+  color: #e2edf1;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--font-micro);
+}
+
+.worktree-new:hover:not(:disabled) {
+  background: #244857;
+}
+
+.worktree-new:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
