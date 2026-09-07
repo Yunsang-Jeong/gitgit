@@ -164,10 +164,7 @@
   <div class="settings-backdrop" role="presentation" on:mousedown={onClose} on:keydown={handleKeydown}>
     <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1" on:mousedown|stopPropagation>
       <header class="settings-header">
-        <div>
-          <h1 id="settings-title">Settings</h1>
-          <span>GitGit preferences</span>
-        </div>
+        <h1 id="settings-title">Settings</h1>
         <button type="button" on:click={onClose} aria-label="Close settings">×</button>
       </header>
 

@@ -5909,13 +5909,6 @@ button.repository-tree-row {
   font-size: var(--font-heading);
 }
 
-.settings-header div > span {
-  display: block;
-  margin-top: 1px;
-  color: var(--text-muted);
-  font-size: var(--font-label);
-}
-
 .settings-header button {
   width: var(--control-height-compact);
   height: var(--control-height-compact);
