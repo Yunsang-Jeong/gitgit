@@ -2,8 +2,9 @@
   import { onMount, tick } from 'svelte'
   import WorktreeCard from './WorktreeCard.svelte'
   import WorktreeCreateDialog from './WorktreeCreateDialog.svelte'
-  import { removalBlocker, selectedBlocker, type WorktreeActionContext } from '../lib/worktree-actions'
-  import type { CreateWorktreeRequest, RepositoryState, WorktreeInfo } from '../lib/types'
+  import WorktreeMoveDialog from './WorktreeMoveDialog.svelte'
+  import { moveBlocker, removalBlocker, selectedBlocker, type WorktreeActionContext } from '../lib/worktree-actions'
+  import type { CreateWorktreeRequest, MoveWorktreeRequest, RepositoryState, WorktreeInfo } from '../lib/types'
 
   export let repository: RepositoryState
   export let activeProjectRoot = ''
@@ -15,12 +16,14 @@
   export let onCreate: (request: CreateWorktreeRequest) => Promise<string>
   export let onChooseParent: (current: string) => Promise<string>
   export let onSuggestParent: () => Promise<string>
+  export let onMove: (request: MoveWorktreeRequest) => Promise<string>
 
   let selectedPaths: string[] = []
   let selectionAnchor = ''
   let actionsOpen = false
   let pendingRemoval: WorktreeInfo[] = []
   let createOpen = false
+  let pendingMove: WorktreeInfo | null = null
   let confirmingRemoval = false
   let confirmButton: HTMLButtonElement
   let actionsRoot: HTMLDivElement
@@ -38,6 +41,9 @@
   } satisfies WorktreeActionContext
   $: removableWorktrees = orderedWorktrees.filter((worktree) => removalBlocker(worktree, actionContext) === '')
   $: removalReason = selectedBlocker(selectedWorktrees, actionContext, removalBlocker)
+  $: moveReason = selectedWorktrees.length === 1
+    ? moveBlocker(selectedWorktrees[0], actionContext)
+    : 'Select exactly one worktree'
   $: if (selectedPaths.some((path) => !selectablePaths.has(path))) {
     selectedPaths = selectedPaths.filter((path) => selectablePaths.has(path))
   }
@@ -164,6 +170,10 @@
               Open in Finder
               {#if selectedWorktrees.length !== 1}<small>Select exactly one worktree</small>{/if}
             </button>
+            <button type="button" role="menuitem" disabled={Boolean(moveReason) || removing} on:click={() => { actionsOpen = false; pendingMove = selectedWorktrees[0] ?? null }}>
+              Move…
+              {#if moveReason}<small>{moveReason}</small>{/if}
+            </button>
             <button class="danger" type="button" role="menuitem" disabled={Boolean(removalReason)} on:click={() => void requestRemoval(selectedWorktrees)}>
               Remove {selectedWorktrees.length} worktree{selectedWorktrees.length === 1 ? '' : 's'} &amp; branches
               {#if removalReason}<small>{removalReason}</small>{/if}
@@ -260,6 +270,16 @@
       {onChooseParent}
       {onSuggestParent}
       onClose={() => (createOpen = false)}
+    />
+  {/if}
+
+  {#if pendingMove}
+    <WorktreeMoveDialog
+      worktree={pendingMove}
+      busy={removing}
+      {onMove}
+      {onChooseParent}
+      onClose={() => (pendingMove = null)}
     />
   {/if}
 

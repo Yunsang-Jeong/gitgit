@@ -41,6 +41,7 @@
     CommitEditStack,
     CommitFileDraft,
     CreateWorktreeRequest,
+    MoveWorktreeRequest,
     CommitFilterRule,
     CommitFilterAction,
     CommitFilterField,
@@ -1567,6 +1568,34 @@
     }
   }
 
+  async function moveWorktree(request: MoveWorktreeRequest): Promise<string> {
+    if (!repository || removingWorktrees) return 'A repository action is already running.'
+    if (repositoryTransitioning || blockRepositoryActionDuringEdit()) return 'Wait for the current repository action to finish.'
+    const repositoryRoot = repository.root
+    const requestID = repositoryRequestID
+    removingWorktrees = true
+    try {
+      const result = await api.moveWorktree(request)
+      if (requestID !== repositoryRequestID || repository?.root !== repositoryRoot) return ''
+      await activateRepository(result.state, result.state.project_root || activeProjectRoot)
+      setStatus(`Worktree moved to ${result.path}`, 'success')
+      return ''
+    } catch (error) {
+      const message = errorText(error)
+      if (requestID !== repositoryRequestID || repository?.root !== repositoryRoot) return message
+      setStatus(message, 'error')
+      try {
+        const refreshed = await api.refresh()
+        if (requestID === repositoryRequestID && repository?.root === repositoryRoot) repository = refreshed
+      } catch {
+        // Preserve the actionable move error when refresh also fails.
+      }
+      return message
+    } finally {
+      removingWorktrees = false
+    }
+  }
+
   async function addPatternSearch(source: Pattern['source'], value: string): Promise<void> {
     const normalized = value.trim()
     if (!normalized) return
@@ -2364,6 +2393,7 @@
         onCreate={createWorktree}
         onChooseParent={(current) => api.chooseWorktreeParentDirectory(current)}
         onSuggestParent={() => api.suggestedWorktreeParentDirectory()}
+        onMove={moveWorktree}
       />
     {:else if navigatorView === 'worktrees'}
       <section class="worktree-workspace pane"><div class="workspace-empty">Select a project to view its worktrees.</div></section>
