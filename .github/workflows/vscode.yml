@@ -1,10 +1,16 @@
 name: VS Code Extension
 
+# Temporarily reduced to manual runs only.
+#
+# internal/desktop's remote tests build their bare fixture with `git init
+# --bare` and then push `main` to it, so they depend on the ambient
+# init.defaultBranch. That is `main` on the development machine and `master`
+# on ubuntu-latest, where the clone therefore has no `main` to push and three
+# tests fail before packaging is ever reached.
+#
+# Restore the push and pull_request triggers once the fixture names its own
+# default branch.
 on:
-  pull_request:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
